@@ -1,0 +1,80 @@
+name: Automatic X posting
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Send real X posts (leave off for a test)'
+        type: boolean
+        default: false
+      initialize:
+        description: 'Initialize history (first run only; leave live off)'
+        type: boolean
+        default: false
+      reconcile_story:
+        description: 'Optional uncertain story ID from the posting report'
+        type: string
+        default: ''
+      confirmed_post_id:
+        description: 'For reconciliation: confirmed numeric X post ID'
+        type: string
+        default: ''
+      confirm_not_posted:
+        description: 'For reconciliation: I checked X and this attempt was not posted'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: x-autopost-history
+  cancel-in-progress: false
+jobs:
+  post:
+    if: github.event_name == 'workflow_dispatch' || vars.AUTOPOST_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Run tests without account credentials
+        run: python -m unittest discover -s tests -v
+      - name: Collect and publish batch
+        env:
+          TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
+          TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
+          LIVE: ${{ github.event_name == 'schedule' || inputs.live }}
+          INITIALIZE: ${{ inputs.initialize }}
+          RECONCILE_STORY: ${{ inputs.reconcile_story }}
+          CONFIRMED_POST_ID: ${{ inputs.confirmed_post_id }}
+          CONFIRM_NOT_POSTED: ${{ inputs.confirm_not_posted }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--batch 5 --daily-limit 400 --interval 5)
+          if [[ "$LIVE" == "true" ]]; then args+=(--live); fi
+          if [[ "$INITIALIZE" == "true" ]]; then
+            if [[ "$LIVE" == "true" ]]; then
+              echo 'Initialize history in a dry run first.'
+              exit 1
+            fi
+            args+=(--initialize)
+          fi
+          if [[ -n "$RECONCILE_STORY" ]]; then
+            args+=(--reconcile-story "$RECONCILE_STORY" --confirmed-post-id "$CONFIRMED_POST_ID")
+            if [[ "$CONFIRM_NOT_POSTED" == "true" ]]; then args+=(--confirm-not-posted); fi
+          fi
+          python actions_runner.py "${args[@]}"
+      - name: Save run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: posting-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: posting-report.json
+          if-no-files-found: ignore
+          retention-days: 7

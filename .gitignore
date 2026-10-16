@@ -1,0 +1,8 @@
+.local/
+__pycache__/
+*.pyc
+.env
+*.db
+cookie.txt
+*.har
+posting-report.json

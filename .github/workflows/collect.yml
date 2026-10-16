@@ -1,0 +1,29 @@
+name: Collect trending stories
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: story-collection
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
+      - name: Collect
+        run: python app.py collect
+      - name: Export report
+        if: always()
+        run: python app.py report > stories.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trending-stories
+          path: stories.json
+          retention-days: 7
