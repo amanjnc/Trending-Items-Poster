@@ -1,70 +1,95 @@
-# News queue: GitHub setup
+# Prepared queue: GitHub setup
 
-Use the **News queue** workflow. It replaces the old two-post TechCrunch test. **Posting history setup and recovery** is now a no-post recovery tool.
+No always-on computer or server is needed. Your existing `TWEETKIT_COOKIE` repository secret and `autopost-state` history are reused. Do not reinitialize or delete history.
 
-## First: check the sources without posting
+## 1. Preview collection and prepared posts
 
-1. Open the repository's **Actions** tab and select **News queue**.
-2. Click **Run workflow**, selecting **main**.
-3. Leave **Publish news** unchecked. Leave **Stop after two posts** checked.
-4. Run it and inspect **Collect, rank and publish one at a time**.
-5. Download the `queue-report` artifact if you want the full source report and five ranked draft examples.
+1. Open **Actions → Collect and prepare news → Run workflow**.
+2. Choose **main** and leave **Also publish ONE prepared item** unchecked.
+3. Run it and open the preparation report/artifact.
 
-The preview collects only when the previous collection is at least two hours old, saves the queue, and makes no X requests or likes. Source errors appear individually; a green run does not mean every source worked. Missing, private, renamed, or web-preview-disabled Telegram channels are reported as errors, not silently counted as collected. If a preview immediately follows another collection, it reuses the queue. Failed-source retries happen on the next due collection.
+The report shows source results, prepared-item count, confirmed handles, and top/bottom five with rank reasons. Preview can read X profiles using your existing session to confirm mentions, but sends no posts or likes. A green collection does not prove every source succeeded: review each source's status.
 
-No new Telegram login or API credentials are needed: this version reads public `t.me/s/<channel>` pages. It cannot access private channels or promise complete Telegram history. It reads up to three preview pages/channel per collection; media-only messages are skipped. The configured handles are user-selected sources, not a verification of who operates each channel. `@rtnews telegram` was interpreted as `@rtnews`.
+## 2. Test one fast publication
 
-## Then: a two-post live test
+1. Open **Actions → Publish next queued post → Run workflow**.
+2. Choose **main**.
+3. Check **Send ONE already-prepared post**.
+4. Run it and inspect your X profile and job duration.
 
-1. Run **News queue** again.
-2. Check **Publish news**.
-3. Keep **Stop after two posts** checked.
-4. Wait: the posts will be separated by the adaptive interval, normally 2, 3, or 4 minutes, rather than posted as a batch.
+This job does not collect, rewrite, rerank, look up profiles, scan replies, run tests, or wait for the next slot. It checks eligibility/expiry and posting limits, optionally fetches/uploads one source image, reserves the attempt durably, posts once, records the result, then exits. A second manual run within two minutes exits without sleeping. Empty/expired queues exit without posting.
 
-The existing `TWEETKIT_COOKIE` Actions secret is reused. This live test also checks replies to your recent posts and likes retrieved direct replies, including criticism, as requested. It excludes your own comments, never writes text replies, and never intentionally likes the same reply twice. To test posts without likes, set repository variable `AUTO_LIKE_REPLIES=false` before running.
+## 3. Enable ongoing operation
 
-## Enable the ongoing queue
-
-In **Settings → Secrets and variables → Actions → Variables**, create:
+Under **Settings → Secrets and variables → Actions → Variables**, set:
 
 - `NEWS_QUEUE_ENABLED` = `true`
+- Optional: `AUTO_LIKE_REPLIES` = `false` to stop automatic reply likes. Otherwise your requested all-replies preference remains enabled for retrieved direct replies.
 
-No additional secret is required. The old `AUTOPOST_ENABLED` variable is not used by this workflow. The schedule starts jobs every two hours at minute 7 (UTC even-numbered hours). Each job runs for up to 115 minutes, collects when the two-hour collection timer is due, and publishes one queued item at a time. It exits early if the queue empties, the 400-attempt rolling daily cap applies, or a posting result is uncertain.
+The schedule is partitioned into **12 collection-and-publication jobs + 276 publication-only jobs/day**. Collection runs at minute 7 of even UTC hours. Publishing runs in the remaining five-minute slots; no duplicate publication slot is scheduled at the collection time. Reply checks are separate hourly jobs at minute 24. The global history concurrency group serializes jobs; GitHub delays can cause gaps or skipped pending runs. This is not a precision scheduler.
 
-`AUTO_LIKE_REPLIES` defaults to enabled unless explicitly set to `false`, following your request to like all replies. `TWEETKIT_COOKIE` should include the `twid` user identifier as well as `auth_token` and `ct0`; if the account identity cannot be determined, likes are skipped and `identity_ready` is false in the reply report.
+Every publication job sends at most one post. There are no deliberate sleep periods. The old two-post/sleeping-worker mode is removed from active workflows.
 
-To stop scheduled jobs, set `NEWS_QUEUE_ENABLED=false` or disable **News queue** in Actions. Cancel any running job too. A manually launched live job still posts even with the schedule disabled.
+Disable scheduled operation with `NEWS_QUEUE_ENABLED=false`; cancel any currently running job too. Manual live dispatch still works with scheduling disabled.
 
-## Sources and editing rules
+## Account mentions and writing
 
-`sources.json` contains the ten selected Telegram handles and The Verge RSS feed. ClashReport has a priority boost; freshness, available Telegram view counts, coverage by distinct configured sources, and recent source repetition also influence rank. Coverage counts do not prove independent corroboration.
+`entity_map.json` contains initial identity mappings including Mark Wahlberg, Replit, Anthropic, and Amjad Masad. Collection can also discover explicit named X profile links in supported publisher articles and unambiguous account claims from Wikidata. Automatic discovery is bounded to eight new name candidates per collection and cached. Handles are never guessed by stripping spaces from names.
 
-Ads with explicit paid-promotion/referral language are rejected. Subscription lines, standalone source handles, and hashtag footers are removed; inline topic hashtags keep their words without the `#`. Small trailing source handles are stripped while retaining the news text. These are conservative text rules, not a perfect advertisement classifier. Inspect previews to tune source-specific formats.
+Before a handle is used, the returned X profile must exist and match the intended mapped identity's name/username. Positive profile results are cached for 24 hours, mismatches for six hours. Curated mappings take precedence over discovered links; ambiguous or unavailable lookups keep the original name. Matching a structured record and profile is not a guarantee against every erroneous external identity claim. A paid blue check alone is not treated as proof of identity. Not every person/company can be automatically resolved; review previews and extend curated mappings for recurring missing entities.
 
-The Verge contributes article headlines and links. Telegram contributes cleaned text excerpts and a source permalink. Long Telegram text uses complete sentences when they fit, otherwise a word-boundary excerpt. X's 280-character budget is respected conservatively. There is no paid AI service, independent fact checker, translation, image/video upload, or automatic generated reply. Source links remain for attribution; channel footer advertising is removed.
+For a headline such as “Replit is no longer working with Anthropic, CEO says,” the prepared result can use `@Replit`, `@AnthropicAI`, and `@amasad` **only if those profiles are confirmed and the source explicitly names Amjad Masad as the speaker**. Otherwise it keeps the unresolved name or attribution. It never assigns a quotation based solely on an assumed current job title.
 
-## Adaptive pacing and duplicates
+Editing is deterministic and free: concise wording, source-footer removal, relevant mentions, readable paragraphs and excerpts within X's character budget. It preserves uncertainty such as “reportedly” or “wants to.” It does not invent facts, quotes, impact statistics, hype, or guaranteed virality. No paid language-model service is configured.
 
-The queue is saved on `autopost-state` with the previous posting ledger, so source changes do not reset history or daily limits. Old Hacker News/TechCrunch candidates are not eligible in the new queue. It checks normalized URLs and exact/near-identical text across sources, including recent old posting history. Changed figures can remain distinct updates. Heuristic matching cannot identify every paraphrase, translation, or repeated event.
+## Images and links
 
-The delay is selected from 120, 180, and 240 seconds using queue size and time until the next collection. Heavy queue: 2 minutes; medium queue: 3; sparse queue: 4. The next due time is retained between jobs, and a minimum two-minute guard also applies. A very sparse queue can still run empty before two hours because the maximum requested delay is four minutes. It never repeats items to fill gaps. GitHub scheduling delays, worker handover, source collection, and external requests can create longer gaps; this is not a precision clock.
+Preference is a ranking bonus: link-free image posts, then link-free text, then outbound-link posts. Freshness and usefulness remain important; format is not an absolute ordering rule.
 
-## Reply likes and limits
+The collector captures Telegram photo references and supported RSS/publisher image URLs. One image can be uploaded with a post. Binary media is not packed into the Git history database: the publisher fetches the one selected image from a restricted source-host allowlist and uploads it to X. Redirects, format signatures and a 2.5 MB cap are checked. This extra network work can make image posts slower than text-only posts. Missing/unsupported images fall back to text before sending; failures after a public send attempt pause rather than risking a duplicate.
 
-While a live worker is active, it checks replies about every 30 minutes, using a bounded scan of recent posts from the last 48 hours. It rotates through up to 20 posts/scan and retrieves up to 100 replies per post, subject to TweetKit/X pagination and visibility. It stores observed direct replies durably and likes pending replies within a short time budget so news posting can continue. Large conversations, hidden/deleted replies, inactive workers, and X restrictions prevent a guarantee that every reply will be seen or liked.
+Ordinary prepared posts omit outbound links while retaining source provenance in the backend/report. Essential action/reference links may remain. Links to X itself are not penalized as outbound links. Source material is not independently fact-checked, and images are not generated by the app.
 
-The pinned TweetKit version omits direct-parent IDs from its public flattened replies. A response hook reads only those parent IDs from the same response in memory; it sends no extra credentials anywhere. Replies without confirmed direct parentage are not liked. This adapter is covered by fixtures but still needs live compatibility validation on your account.
+## Ranking, age and expiration
 
-An uncertain like is not retried. Other pending/new replies can continue in a later scan. The report lists uncertain reply IDs; check those manually on X. This avoids accidentally repeating uncertain actions. Any X rejection stops further likes for that scan. No rate-limit or login-challenge bypass is included.
+At collection time all eligible candidates are prepared and ranked once. Freshness, ClashReport priority, available Telegram views, source coverage, content detail, format bonus and source/event diversity determine the saved order. A small urgency bonus is capped at five points and applies only to sufficiently strong candidates. It never overrides hard expiration.
 
-## Recover an uncertain post
+Typical shelf lives:
 
-Never delete or reset `autopost-state`. Check your X profile first. Open **Posting history setup and recovery**, choose **main**, leave initialization unchecked, and enter the uncertain story ID from the report. Supply either the confirmed numeric post ID or check **I checked X and this attempt was not posted**. This saves the outcome without posting. A confirmed-not-posted story stays reserved and is not retried automatically.
+- Six hours: outages, evacuation/weather/air-raid alerts and live results.
+- Twelve hours: market-price updates and explicitly short-lived phrasing.
+- Twenty-four hours: ordinary news.
+- Forty-eight hours: launches, releases, funding and partnership news.
+- Up to five days: selected research, explainers, reviews and guides.
 
-If history has never been initialized, use that same recovery workflow with **Initialize history** checked first. Existing users should not reinitialize it.
+Supported explicit relative/ISO-dated event deadlines shorten those limits. These are heuristic relevance rules, not comprehensive event understanding. No item remains eligible beyond five days. The publisher only performs a cheap expiration/eligibility check; it does not rerank. Very small queues can run empty, and no duplicate filler posts are created.
 
-## Hosting and account limitations
+## Reply likes
 
-No computer or server must remain on. Standard public-repository GitHub runners are generally free; private repositories can consume roughly 40,000 runner minutes/month if workers stay busy nearly all day, so check your plan before enabling. GitHub can delay scheduled jobs or disable inactive public-repository schedules.
+**Check replies and like** runs separately once per hour and can be manually dispatched. It processes retrieved direct replies under recent posts, excluding your own comments and avoiding intentionally repeated likes. It does not send text replies. Bounded scans, hidden/deleted replies, missing `twid` identity, X restrictions and large backlogs prevent a guarantee that every comment is seen or liked.
 
-TweetKit-X uses your unofficial X web session. Its author warns this can lead to account restrictions. X can expire the cookie or reject runner IPs. Replace the secret securely if necessary; never send cookies in chat, screenshots, source, reports, or logs. The state branch stores public story/comment metadata, not credentials. Do not run a second independent publisher on the same X account with separate history.
+Observed replies and pending likes are retained in history. Uncertain likes are not retried. The pinned TweetKit adapter confirms direct parentage from response metadata; live compatibility still needs testing after library changes. Review-only/manual previews do not like comments.
+
+## Efficiency and runtime measurement
+
+Dependencies are restored as an installed virtual environment keyed by OS, architecture, exact Python version and requirements hash. Installation runs only on cache misses. Unit tests run on code pushes/PRs rather than each scheduled publication. The posting path imports no collector/editorial module.
+
+The report includes `task_seconds` and `state_and_task_seconds`; the latter includes Git state restore. Neither includes GitHub runner allocation, checkout or cache setup. Use the full Actions job duration for actual billing estimates. Text posts are intended to finish quickly with a warm cache, but no sub-minute guarantee is made. Image upload, X's internal session requests, Git state writes, cold caches and service delays are unavoidable external costs.
+
+GitHub rounds each job to whole runner minutes. Standard public-repository runners are generally free; private plans have allowances. At one billed minute per publication-only job and two to three per collection, the posting pipeline is roughly 9,000–9,360 minutes/30 days before extra setup overruns. Hourly reply checks add 720–1,440 minutes if each takes one to two minutes. Code-check jobs add their own usage. Measure real durations rather than treating those assumptions as promises.
+
+## External scheduler later
+
+The finite entry points are ready for an authenticated external scheduler:
+
+- Dispatch `queue.yml` with `live=true` every two hours.
+- Dispatch `publish.yml` with `live=true` for intervening posting slots.
+- Optionally dispatch `replies.yml` with `live=true` on a separate cadence.
+
+Disable `NEWS_QUEUE_ENABLED` when switching, so GitHub cron and the external scheduler do not both drive the queue. Store the scheduler's GitHub authorization only in its secure secret settings, never chat, repository source or a URL. No computer must remain open. If it triggers GitHub Actions jobs, GitHub runner billing still applies; an external scheduler alone does not remove the one-minute job rounding. No external service is connected yet.
+
+## History recovery and account access
+
+Never delete `autopost-state`. **Posting history setup and recovery** can initialize a new history or reconcile an uncertain story ID with its confirmed X post ID / confirmed-not-posted outcome. Reconciliation sends no post. An uncertain public send pauses further posting until resolved.
+
+TweetKit-X uses your unofficial X web session, not a paid developer API. Its author warns this can cause account restrictions; X can expire the cookie or reject runner IPs. Keep `TWEETKIT_COOKIE` private, never paste it in chat/logs/screenshots, and replace it securely if necessary. State contains public news/comment metadata and prepared text, not credentials. Avoid a second independent publisher using separate history on the same account.

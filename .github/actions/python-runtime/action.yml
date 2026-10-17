@@ -1,0 +1,20 @@
+name: Cached Python runtime
+description: Restore pinned installed dependencies instead of reinstalling every posting job.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      id: python
+      with:
+        python-version: '3.12'
+    - uses: actions/cache@v4
+      id: runtime
+      with:
+        path: .local/runtime
+        key: ${{ runner.os }}-${{ runner.arch }}-python-${{ steps.python.outputs.python-version }}-runtime-${{ hashFiles('requirements.txt') }}
+    - name: Install only on cache miss
+      if: steps.runtime.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        python -m venv .local/runtime
+        .local/runtime/bin/python -m pip install -r requirements.txt

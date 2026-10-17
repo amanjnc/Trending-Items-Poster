@@ -19,8 +19,9 @@ def authorization():
         raise ValueError('Session cookie is incomplete; update TWEETKIT_COOKIE securely') from None
 
 
-def send(text):
-    result = authorization().post(text)
+def send(text,image_path=None):
+    client=authorization()
+    result = client.post(text,image_path=str(image_path)) if image_path else client.post(text)
     if result.get('ok') is not True or not str(result.get('id', '')).isdigit():
         # Upstream response bodies may contain sensitive information. Do not log them.
         raise RuntimeError('TweetKit-X did not confirm a successful post')

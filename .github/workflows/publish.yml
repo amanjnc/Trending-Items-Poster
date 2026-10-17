@@ -1,0 +1,42 @@
+name: Publish next queued post
+on:
+  schedule:
+    - cron: '2,12,17,22,27,32,37,42,47,52,57 * * * *'
+    - cron: '7 1-23/2 * * *'
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Send ONE already-prepared post (off = preview)'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: x-autopost-history
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || vars.NEWS_QUEUE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-runtime
+      - name: Send next prepared item and exit
+        env:
+          TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
+          TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
+          LIVE: ${{ github.event_name == 'schedule' || inputs.live }}
+        shell: bash
+        run: |
+          args=(--mode publish)
+          if [[ "$LIVE" == "true" ]]; then args+=(--live); fi
+          .local/runtime/bin/python queue_worker.py "${args[@]}"
+      - name: Save posting result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: posting-report.json
+          if-no-files-found: ignore
+          retention-days: 7

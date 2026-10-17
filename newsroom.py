@@ -41,7 +41,8 @@ def database():
         CREATE TABLE IF NOT EXISTS reply_actions (
         reply_id TEXT PRIMARY KEY, post_id TEXT NOT NULL, text TEXT NOT NULL,
         state TEXT NOT NULL, attempted REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS reply_scan_posts (post_id TEXT PRIMARY KEY, checked REAL NOT NULL);''')
+        CREATE TABLE IF NOT EXISTS reply_scan_posts (post_id TEXT PRIMARY KEY, checked REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS story_media (story_id TEXT PRIMARY KEY, media_url TEXT NOT NULL);''')
     return c
 
 
@@ -85,8 +86,9 @@ def clean_text(text, source_handles=()):
         # Keep meaningful topic words, without importing source hashtag formatting.
         line = re.sub(r'#([\w]+)', r'\1', line)
         line = re.sub(r'^[\W_]*(?:BREAKING|JUST IN|URGENT|UPDATE)\s*[:!—–-]+\s*', '', line, flags=re.I)
-        line = re.sub(r'^[^\w\"“]+', '', line)
-        line = re.sub(r'\s+', ' ', line).strip(' |•—-')
+        if not re.match(r'^[−-]\d',line):
+            line = re.sub(r'^[^\w\"“$€£¥]+', '', line)
+        line = re.sub(r'\s+', ' ', line).strip(' |•—')
         if line:
             lines.append(line)
     return '\n'.join(lines).strip()
@@ -145,14 +147,30 @@ def telegram(channel, pages=3):
             raw = (view.get_text(strip=True) if view else '0').replace(',', '')
             vm = re.fullmatch(r'([\d.]+)([KM]?)', raw, re.I)
             views = int(float(vm[1]) * {'': 1, 'K': 1000, 'M': 1000000}[vm[2].upper()]) if vm else 0
+            photo=msg.select_one('.tgme_widget_message_photo_wrap')
+            image_match=re.search(r'''background-image:\s*url\(['"]?(.*?)['"]?\)''',photo.get('style','')) if photo else None
             rows.append(dict(title=body.get_text(), url='https://t.me/'+post,
-                             source='Telegram @'+channel, published=date.timestamp(), views=views))
+                             source='Telegram @'+channel, published=date.timestamp(), views=views,
+                             media_url=html.unescape(image_match[1]) if image_match else None))
         if not ids or str(min(ids)) == before:
             break
         before = str(min(ids))
-        if rows and max(r['published'] for r in rows[-len(messages):]) < app.now()-86400:
+        if rows and max(r['published'] for r in rows[-len(messages):]) < app.now()-5*86400:
             break
     return rows
+
+
+def feed_image(entry):
+    for node in entry.iter():
+        local=node.tag.rsplit('}',1)[-1]
+        if local=='thumbnail' or (local=='content' and node.get('medium')=='image'):
+            if node.get('url'):
+                return node.get('url')
+        if local in ('content','description') and node.text and '<img' in node.text:
+            image=BeautifulSoup(node.text,'html.parser').find('img')
+            if image:
+                return image.get('src')
+    return None
 
 
 def verge(url):
@@ -170,7 +188,7 @@ def verge(url):
                 try:
                     date = dt.datetime.fromisoformat(stamp.replace('Z', '+00:00'))
                     if date.tzinfo is not None:
-                        rows.append(dict(title=title, url=links[0], source='The Verge', published=date.timestamp()))
+                        rows.append(dict(title=title, url=links[0], source='The Verge', published=date.timestamp(),media_url=feed_image(entry)))
                 except ValueError:
                     continue
     else:
@@ -179,7 +197,7 @@ def verge(url):
                 date = parsedate_to_datetime(entry.findtext('pubDate') or '')
                 if date.tzinfo is None:
                     continue
-                rows.append(dict(title=entry.findtext('title'), url=entry.findtext('link'), source='The Verge', published=date.timestamp()))
+                rows.append(dict(title=entry.findtext('title'), url=entry.findtext('link'), source='The Verge', published=date.timestamp(),media_url=feed_image(entry)))
             except (ValueError, TypeError):
                 continue
     if not rows:
@@ -192,7 +210,7 @@ def enqueue(rows, priority, handles):
     for row in rows:
         body = clean_text(row['title'], handles)
         stamp = row['published']
-        if len(signature(body).split()) < 7 or len(body) < 45 or stamp < app.now()-86400 or stamp > app.now()+60:
+        if len(signature(body).split()) < 7 or len(body) < 45 or stamp < app.now()-5*86400 or stamp > app.now()+60:
             counts['rejected'] += 1
             continue
         try:
@@ -206,11 +224,15 @@ def enqueue(rows, priority, handles):
             known = c.execute('SELECT story_id FROM observations WHERE url=?', (url,)).fetchone()
             if known:
                 c.execute('UPDATE news_items SET views=MAX(views,?) WHERE story_id=?', (row.get('views',0),known[0]))
+                if row.get('media_url'):
+                    selected=c.execute('SELECT source FROM stories WHERE id=?',(known[0],)).fetchone()
+                    if selected and selected[0]==row['source']:
+                        c.execute('INSERT OR REPLACE INTO story_media VALUES(?,?)',(known[0],row['media_url']))
                 counts['duplicates'] += 1
                 continue
             recent = c.execute('''SELECT s.id,s.title,s.source,p.story_id AS posted,n.priority
                 FROM stories s LEFT JOIN news_items n ON n.story_id=s.id
-                LEFT JOIN publications p ON p.story_id=s.id WHERE s.published>?''', (app.now()-3*86400,)).fetchall()
+                LEFT JOIN publications p ON p.story_id=s.id WHERE s.published>?''', (app.now()-7*86400,)).fetchall()
             duplicate = next((r for r in recent if is_duplicate(body, r['title'])), None)
             if duplicate:
                 counts['duplicates'] += 1
@@ -219,6 +241,9 @@ def enqueue(rows, priority, handles):
                 if not duplicate['posted'] and priority > (duplicate['priority'] or 0):
                     c.execute('UPDATE stories SET title=?,url=?,source=?,published=? WHERE id=?', (body,url,row['source'],stamp,target))
                     c.execute('INSERT OR REPLACE INTO news_items VALUES(?,?,?,?,?)', (target,body,fingerprint,priority,row.get('views',0)))
+                    c.execute('DELETE FROM story_media WHERE story_id=?',(target,))
+                    if row.get('media_url'):
+                        c.execute('INSERT INTO story_media VALUES(?,?)',(target,row['media_url']))
                 continue
             if c.execute('SELECT 1 FROM stories WHERE id=? OR url=?', (identity,url)).fetchone():
                 counts['duplicates'] += 1
@@ -227,6 +252,8 @@ def enqueue(rows, priority, handles):
                       (identity,body,url,row['source'],stamp,app.now(),0))
             c.execute('INSERT INTO news_items VALUES(?,?,?,?,?)', (identity,body,fingerprint,priority,row.get('views',0)))
             c.execute('INSERT INTO observations VALUES(?,?,?)', (url,identity,row['source']))
+            if row.get('media_url'):
+                c.execute('INSERT OR REPLACE INTO story_media VALUES(?,?)',(identity,row['media_url']))
             counts['added'] += 1
     return counts
 

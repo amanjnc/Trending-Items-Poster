@@ -108,6 +108,21 @@ class HistoryTests(unittest.TestCase):
         with newsroom.database() as c:
             self.assertEqual(c.execute('SELECT state FROM reply_actions WHERE reply_id="123"').fetchone()[0],'pending')
 
+    def test_prepared_queue_and_handle_cache_survive_fresh_runner(self):
+        import newsroom,postcraft,prepared
+        state=GitState(self.repo,initialize=True)
+        newsroom.enqueue([dict(title='A new research team announced findings that could improve batteries used in electric vehicles.',url='https://t.me/ClashReport/1',source='Telegram @ClashReport',published=app.now())],1.8,['ClashReport'])
+        postcraft.prepare()
+        original=prepared.next_post()['text']
+        with prepared.database() as c:
+            c.execute('INSERT INTO entity_cache VALUES(?,?,?)',('replit','{"valid":true,"names":["Replit"]}',app.now()+3600))
+        state.checkpoint()
+        app.DB=self.root/'restored-prepared.db'
+        GitState(self.checkout('prepared-next-run'))
+        self.assertEqual(prepared.next_post()['text'],original)
+        with prepared.database() as c:
+            self.assertIsNotNone(c.execute('SELECT 1 FROM entity_cache WHERE handle="replit"').fetchone())
+
     def test_stale_writer_cannot_overwrite_history(self):
         first = GitState(self.repo, initialize=True)
         app.DB = self.root / 'second.db'

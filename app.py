@@ -24,7 +24,7 @@ def now():
     return dt.datetime.now(UTC).timestamp()
 
 def fetch(url):
-    req = urllib.request.Request(url, headers={'User-Agent': 'TrendingItemsPoster/0.1 (public news discovery)'})
+    req = urllib.request.Request(url, headers={'User-Agent': 'TrendingItemsPoster/0.2 (+https://github.com/amanjnc/Trending-Items-Poster)'})
     with urllib.request.urlopen(req, timeout=15) as r:
         return r.read(4_000_000)
 

@@ -1,0 +1,40 @@
+name: Check replies and like
+on:
+  schedule:
+    - cron: '24 * * * *'
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Check and like retrieved direct replies'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: x-autopost-history
+  cancel-in-progress: false
+jobs:
+  replies:
+    if: github.event_name == 'workflow_dispatch' || (vars.NEWS_QUEUE_ENABLED == 'true' && vars.AUTO_LIKE_REPLIES != 'false')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-runtime
+      - name: Process reply likes separately from publishing
+        env:
+          TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
+          TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
+          LIVE: ${{ github.event_name == 'schedule' || inputs.live }}
+        shell: bash
+        run: |
+          args=(--mode replies --auto-like)
+          if [[ "$LIVE" == "true" ]]; then args+=(--live); fi
+          .local/runtime/bin/python queue_worker.py "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replies-${{ github.run_id }}-${{ github.run_attempt }}
+          path: posting-report.json
+          if-no-files-found: ignore
+          retention-days: 7

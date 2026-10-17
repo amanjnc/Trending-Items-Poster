@@ -76,7 +76,7 @@ class EditorialTests(DatabaseCase):
         rendered=newsroom.render(row)
         self.assertEqual(rendered,TEXT+'\n'+row['url'])
     def test_freshness_and_future_rejection(self):
-        for stamp in (app.now()-90000,app.now()+3600):
+        for stamp in (app.now()-6*86400,app.now()+3600):
             row=dict(title=TEXT,source='Telegram @ClashReport',url='https://t.me/ClashReport/1',published=stamp)
             self.assertEqual(newsroom.enqueue([row],1,[])['rejected'],1)
     def test_original_posted_titles_also_deduplicate(self):
@@ -116,30 +116,18 @@ class SchedulingTests(DatabaseCase):
         self.assertEqual(newsroom.adaptive_interval(70,7200),120)
         self.assertEqual(newsroom.adaptive_interval(40,7200),180)
         self.assertEqual(newsroom.adaptive_interval(20,7200),240)
-    def test_worker_collects_once_and_spaces_two_posts(self):
-        cfg=newsroom.config()
-        cfg['daily_limit']=400
-        start=app.now()
-        clock=[start]
-        pauses=[]
-        def collect(cfg):
+    def test_collection_job_prepares_then_publishes_only_one_without_sleeping(self):
+        def collect():
             self.add(url='https://t.me/ClashReport/1')
             self.add('Researchers developed new batteries that could reduce charging times for electric vehicles across Europe.',url='https://t.me/ClashReport/2')
-            newsroom.state_set('last_collection',clock[0])
             return {'Telegram @ClashReport':{'added':2}}
-        def sleep(seconds):
-            pauses.append(seconds)
-            clock[0]+=seconds
-        events=[]
-        def send(text):
-            events.append(clock[0])
-            return str(len(events))
-        with patch('app.now',side_effect=lambda:clock[0]),patch('newsroom.config',return_value=cfg),patch('newsroom.collect',side_effect=collect) as collection,patch('automation.authorization'),patch('automation.send',side_effect=send),patch('time.sleep',side_effect=sleep):
-            report=queue_worker.run(Mock(),live=True,max_posts=2)
-        self.assertEqual(collection.call_count,1)
-        self.assertEqual(len(events),2)
-        self.assertEqual(events[1]-events[0],240)
-        self.assertTrue(report['ok'])
+        with patch('newsroom.collect',side_effect=collect) as collector,patch('automation.authorization'),patch('automation.send',return_value='1') as send,patch('time.sleep') as sleep:
+            report=queue_worker.run(Mock(),mode='collect',live=True)
+        collector.assert_called_once()
+        send.assert_called_once()
+        sleep.assert_not_called()
+        self.assertEqual(report['preparation']['prepared'],2)
+        self.assertEqual(report['publication']['publishing'],'posted')
     def test_reservation_saved_before_send_and_restored_interval_enforced(self):
         self.add()
         events=[]
@@ -162,18 +150,20 @@ class SchedulingTests(DatabaseCase):
         with patch('automation.authorization'),patch('automation.send') as send:
             self.assertIn('paused',newsroom.post_one(lambda:None,live=True)['publishing'])
             send.assert_not_called()
-    def test_cached_failed_collection_is_not_reported_as_green(self):
-        newsroom.state_set('last_collection',app.now())
-        newsroom.state_set('collection_report',{'Telegram @ClashReport':{'error':'Unavailable'}})
-        with patch('newsroom.collect') as collect:
+    def test_failed_collection_is_not_reported_as_green(self):
+        with patch('newsroom.collect',return_value={'Telegram @ClashReport':{'error':'Unavailable'}}):
             report=queue_worker.run(Mock(),live=False)
-        collect.assert_not_called()
         self.assertFalse(report['ok'])
-    def test_recent_collection_is_reused(self):
-        newsroom.state_set('last_collection',app.now())
-        with patch('newsroom.collect') as collect:
-            queue_worker.run(Mock(),live=False)
-            collect.assert_not_called()
+    def test_publish_job_never_collects_rewrites_or_sleeps(self):
+        import postcraft
+        self.add()
+        postcraft.prepare()
+        with patch('newsroom.collect') as collect,patch('postcraft.prepare') as prepare,patch('time.sleep') as sleep:
+            report=queue_worker.run(Mock(),mode='publish',live=False)
+        collect.assert_not_called()
+        prepare.assert_not_called()
+        sleep.assert_not_called()
+        self.assertEqual(report['publishing'],'preview')
 
 class ReplyTests(DatabaseCase):
     def parent(self):

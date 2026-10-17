@@ -1,0 +1,242 @@
+{
+  "entities": [
+    {
+      "names": [
+        "Mark Wahlberg"
+      ],
+      "handle": "markwahlberg",
+      "profile_names": [
+        "Mark Wahlberg"
+      ],
+      "reference": "https://www.markwahlberg.com/"
+    },
+    {
+      "names": [
+        "Replit"
+      ],
+      "handle": "Replit",
+      "profile_names": [
+        "Replit"
+      ],
+      "reference": "https://replit.com/"
+    },
+    {
+      "names": [
+        "Anthropic"
+      ],
+      "handle": "AnthropicAI",
+      "profile_names": [
+        "Anthropic"
+      ],
+      "reference": "https://www.anthropic.com/"
+    },
+    {
+      "names": [
+        "Amjad Masad"
+      ],
+      "handle": "amasad",
+      "profile_names": [
+        "Amjad Masad"
+      ],
+      "reference": "https://x.com/amasad"
+    },
+    {
+      "names": [
+        "OpenAI"
+      ],
+      "handle": "OpenAI",
+      "profile_names": [
+        "OpenAI"
+      ],
+      "reference": "https://openai.com/"
+    },
+    {
+      "names": [
+        "Sam Altman"
+      ],
+      "handle": "sama",
+      "profile_names": [
+        "Sam Altman"
+      ],
+      "reference": "https://blog.samaltman.com/"
+    },
+    {
+      "names": [
+        "Elon Musk"
+      ],
+      "handle": "elonmusk",
+      "profile_names": [
+        "Elon Musk"
+      ],
+      "reference": "https://x.com/elonmusk"
+    },
+    {
+      "names": [
+        "Google"
+      ],
+      "handle": "Google",
+      "profile_names": [
+        "Google"
+      ],
+      "reference": "https://about.google/"
+    },
+    {
+      "names": [
+        "Microsoft"
+      ],
+      "handle": "Microsoft",
+      "profile_names": [
+        "Microsoft"
+      ],
+      "reference": "https://www.microsoft.com/"
+    },
+    {
+      "names": [
+        "Satya Nadella"
+      ],
+      "handle": "satyanadella",
+      "profile_names": [
+        "Satya Nadella"
+      ],
+      "reference": "https://news.microsoft.com/exec/satya-nadella/"
+    },
+    {
+      "names": [
+        "Apple"
+      ],
+      "handle": "Apple",
+      "profile_names": [
+        "Apple"
+      ],
+      "reference": "https://www.apple.com/"
+    },
+    {
+      "names": [
+        "Tim Cook"
+      ],
+      "handle": "tim_cook",
+      "profile_names": [
+        "Tim Cook"
+      ],
+      "reference": "https://www.apple.com/leadership/tim-cook/"
+    },
+    {
+      "names": [
+        "Nvidia",
+        "NVIDIA"
+      ],
+      "handle": "nvidia",
+      "profile_names": [
+        "NVIDIA"
+      ],
+      "reference": "https://www.nvidia.com/"
+    },
+    {
+      "names": [
+        "Meta"
+      ],
+      "handle": "Meta",
+      "profile_names": [
+        "Meta"
+      ],
+      "reference": "https://about.meta.com/"
+    },
+    {
+      "names": [
+        "Tesla"
+      ],
+      "handle": "Tesla",
+      "profile_names": [
+        "Tesla"
+      ],
+      "reference": "https://www.tesla.com/"
+    },
+    {
+      "names": [
+        "Abdel Fattah el-Sisi",
+        "el-Sisi"
+      ],
+      "handle": "AlsisiOfficial",
+      "profile_names": [
+        "عبدالفتاح السيسي",
+        "Abdel Fattah el-Sisi"
+      ],
+      "reference": "https://www.presidency.eg/"
+    },
+    {
+      "names": [
+        "Volodymyr Zelenskyy",
+        "Volodymyr Zelensky"
+      ],
+      "handle": "ZelenskyyUa",
+      "profile_names": [
+        "Volodymyr Zelenskyy / Володимир Зеленський",
+        "Volodymyr Zelenskyy"
+      ],
+      "reference": "https://www.president.gov.ua/en"
+    },
+    {
+      "names": [
+        "Donald Trump"
+      ],
+      "handle": "realDonaldTrump",
+      "profile_names": [
+        "Donald J. Trump",
+        "Donald Trump"
+      ],
+      "reference": "https://www.whitehouse.gov/"
+    },
+    {
+      "names": [
+        "Joe Biden"
+      ],
+      "handle": "JoeBiden",
+      "profile_names": [
+        "Joe Biden"
+      ],
+      "reference": "https://x.com/JoeBiden"
+    },
+    {
+      "names": [
+        "Emmanuel Macron"
+      ],
+      "handle": "EmmanuelMacron",
+      "profile_names": [
+        "Emmanuel Macron"
+      ],
+      "reference": "https://www.elysee.fr/"
+    },
+    {
+      "names": [
+        "Keir Starmer"
+      ],
+      "handle": "Keir_Starmer",
+      "profile_names": [
+        "Keir Starmer"
+      ],
+      "reference": "https://www.gov.uk/government/people/keir-starmer"
+    },
+    {
+      "names": [
+        "Narendra Modi"
+      ],
+      "handle": "narendramodi",
+      "profile_names": [
+        "Narendra Modi"
+      ],
+      "reference": "https://www.pmindia.gov.in/en/"
+    },
+    {
+      "names": [
+        "Benjamin Netanyahu"
+      ],
+      "handle": "netanyahu",
+      "profile_names": [
+        "Benjamin Netanyahu - בנימין נתניהו",
+        "Benjamin Netanyahu",
+        "בנימין נתניהו"
+      ],
+      "reference": "https://x.com/netanyahu"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+name: Code checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-runtime
+      - name: Test without X credentials
+        run: .local/runtime/bin/python -m unittest discover -s tests -v

@@ -1,29 +1,33 @@
 # Trending Items Poster
 
-A persistent news queue running on GitHub Actions, using public Telegram channels and The Verge RSS. Collect about every two hours, clean and rank the stories, and publish one at a time with adaptive 2–4 minute spacing. ClashReport receives a ranking boost.
+A prepared news queue hosted on GitHub Actions. Collection does the expensive work; publishing takes one already-prepared item, sends it, saves its result, and exits. **No sleeping runner or always-on PC/server is required.**
 
-**Start with the [GitHub setup guide](docs/GITHUB_SETUP.md)** and the **News queue** workflow's no-post preview. Scheduling is disabled until `NEWS_QUEUE_ENABLED=true` is configured. The existing X session secret is reused; no paid X developer API or Telegram account is required.
+[Step-by-step setup and scheduler details](docs/GITHUB_SETUP.md).
 
-Sources are configured in [sources.json](sources.json). They include bricsnews, hitech, hiaimediaen, Cointelegraph001, cointelegraph, nytimes, WatcherGuru, rtnews, ClashReport, DDGeopolitics, and The Verge. Only accessible public Telegram web previews are collected. Individual failures and rejection/duplicate counts appear in the run report.
+## Separate jobs
 
-## Processing
+- **Collect and prepare news**: every two hours, fetch configured Telegram/The Verge sources, remove promotions, deduplicate, resolve account identities, edit posts, assign expiry and rank, and save the ordered queue. Scheduled collection also publishes one item.
+- **Publish next queued post**: five-minute slots between collection runs. Only load state, select the next nonexpired prepared row, publish once, record outcome, and exit. No collection, profile lookup, rewriting, re-ranking, tests, reply checking, or waiting.
+- **Check replies and like**: separate hourly jobs, preserving the user's preference to like retrieved direct replies from other users. Disable with `AUTO_LIKE_REPLIES=false`.
+- **Code checks**: tests run when code changes, rather than on every posting job.
 
-- Remove explicit promotions, subscription footers, source handles, and hashtag formatting while preserving meaningful news text.
-- Filter stale/future/empty candidates and media-only Telegram messages.
-- Rank by freshness, configured priority, available views, coverage count, and source diversity.
-- Deduplicate URLs and exact/near-identical text, keeping recent posting history across runs.
-- Save every posting reservation before contacting X; pause on ambiguous post results.
-- Enforce a rolling 400-attempt daily cap. Sparse queues can run empty; no duplicates are invented to hit a quota.
+`NEWS_QUEUE_ENABLED=true` enables the built-in schedules. Publishing uses a cached installed Python environment. Cold cache misses, GitHub queue delays and X/media requests still affect runtime; no sub-minute or viral-performance guarantee is made.
 
-There is no independent fact verification, paid AI rewriting, translation, or image/video posting. Text matching and ad filters are heuristics. The setup guide describes limits, recovery, free-runner conditions, and live validation requirements.
+## Prepared content
 
-## Replies
+Account mentions use curated mappings, source-linked identities, and bounded Wikidata account discovery, followed by cached X profile identity/existence checks. Unknown or ambiguous identities stay as names. See [entity_map.json](entity_map.json) for initial mappings. Speaker replacements require the source to explicitly identify the speaker; a company's current CEO is not automatically assumed to have made an unattributed statement.
 
-Live workers check recent posts periodically and like retrieved direct replies from other users, as requested, regardless of sentiment. Observed replies are queued durably, and likes are deduplicated. No text replies are sent. Set `AUTO_LIKE_REPLIES=false` to disable likes. Hidden replies, large backlogs, missing account identity, and X limitations can prevent complete coverage.
+Posts get concise formatting and word-boundary/sentence excerpts that preserve stated uncertainty. No fabricated claims, quotes, statistics, or engagement bait are added. This is rule-based editing, not a paid AI writer, independent fact checker, or prediction of virality.
+
+Format preference, all else equal: **text + image without an outbound link**, then **text without an outbound link**, then **outbound-link posts**. Available Telegram photos and supported publisher images can be used. Source URLs remain in the backend; ordinary posts omit outbound URLs. Essential action/reference links may remain; internal X links do not get the outbound-link penalty. Image upload requires extra network work in the publishing job. Unsupported or unavailable images fall back to text before any public posting attempt.
+
+Rank combines freshness, source priority (ClashReport boosted), available views, coverage, content detail, format preference and a small capped urgency bonus. Queue ordering interleaves sources and separates related speaker/event items. Exact and near-identical story text is deduplicated across sources; paraphrases and translations are not perfectly detected.
+
+Expiry is content-sensitive: short-lived alerts around six hours, market/time-sensitive items around twelve, ordinary news twenty-four, launch/business updates forty-eight, selected evergreen research/guides up to five days. Explicit supported deadlines can shorten this. Expired items are skipped at posting time even between collections. Urgency never overrides the expiry gate and is only a minor ranking bonus.
 
 ## Local development
 
-Requires Python 3.12+. Dependencies are pinned, including TweetKit-X at an inspected commit.
+Python 3.12+:
 
 ```sh
 python -m venv .local/venv
@@ -31,6 +35,8 @@ python -m venv .local/venv
 .local/venv/bin/python -m unittest discover -s tests -v
 ```
 
-`newsroom.py` implements sources, cleanup, deduplication, ranking and queue rules; `queue_worker.py` implements the bounded worker; `engagement.py` implements reply review/likes. Tests use fixtures, simulated clocks and real local Git remotes; they never post publicly. Live provider access and actual reply matching must also be verified on GitHub.
+`newsroom.py` collects/cleans sources; `postcraft.py` resolves identities and prepares/ranks posts; `prepared.py` is the small publisher; `queue_worker.py --mode collect|publish|replies` selects a finite task. `sources.json` holds the source configuration. `TRENDING_DB` selects SQLite state.
 
-GitHub retains SQLite state on `autopost-state`. Do not delete it to fix failures. `TRENDING_DB` controls the database path. The optional local review dashboard remains in `app.py`; it binds to loopback and must not be exposed publicly. Older collectors remain available for development, but the **News queue** workflow uses only `sources.json`. The old posting workflow is now a no-post history setup/recovery tool.
+GitHub keeps state on `autopost-state`, including duplicate history, prepared posts, identity cache and reply actions. Posting reservations are persisted **before** contacting X. Uncertain outcomes are not retried automatically. Never reset history to fix an error. The existing no-post history recovery workflow remains available.
+
+Tests use fixtures, simulated clocks and real local Git remotes; no tests publish/like real content. Live profile discovery, image uploads and GitHub job timings require account-connected validation. The optional legacy dashboard/collectors remain available locally; scheduled publishing uses only the prepared pipeline.
