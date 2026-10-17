@@ -97,6 +97,34 @@ def gate(c,daily_limit,min_gap):
         return 'not due yet; exiting without sleeping'
 
 
+def recover_stale_attempts():
+    """Quarantine abandoned sends, never retry them; back off on repeated failures."""
+    with database() as c:
+        stale=[r[0] for r in c.execute('SELECT story_id FROM publications WHERE state="uncertain" AND attempted<=?',(app.now()-120,))]
+        for identity in stale:
+            c.execute('UPDATE publications SET state="quarantined_uncertain" WHERE story_id=? AND state="uncertain"',(identity,))
+            c.execute('INSERT OR IGNORE INTO posting_events VALUES(?,?,?,?,?)',(identity,'watchdog','stale_attempt_quarantined',None,app.now()))
+        recent=[r[0] for r in c.execute('SELECT state FROM publications WHERE attempted>? ORDER BY attempted DESC LIMIT 3',(app.now()-3600,))]
+        failed={'media_failed','rejected','account_blocked','quarantined_uncertain'}
+        existing=c.execute('SELECT until_time FROM posting_backoff WHERE category="consecutive_failures"').fetchone()
+        # Tie the breaker to the last failed attempt, not the current clock. An
+        # expired cooldown must not reopen forever from the same old failures.
+        latest=c.execute('SELECT MAX(attempted) FROM publications').fetchone()[0]
+        until=(latest or 0)+1800
+        opened=len(recent)==3 and all(s in failed for s in recent) and until>app.now() and (not existing or existing[0]<until)
+        if opened:
+            c.execute('INSERT OR REPLACE INTO posting_backoff VALUES(?,?)',('consecutive_failures',until))
+    return {'quarantined':stale,'circuit_opened':opened}
+
+
+def health():
+    with database() as c:
+        counts={r[0]:r[1] for r in c.execute('SELECT state,COUNT(*) FROM publications WHERE attempted>? GROUP BY state',(app.now()-86400,))}
+        cooldowns=[dict(r) for r in c.execute('SELECT category,until_time FROM posting_backoff WHERE until_time>?',(app.now(),))]
+        last=c.execute('SELECT MAX(attempted) FROM publications WHERE state="posted"').fetchone()[0]
+    return {'last_confirmed_post_at':last,'last24h':counts,'active_cooldowns':cooldowns}
+
+
 def cleanup_posted():
     """Discard posted queue payloads; retain text/IDs needed for deduplication and replies."""
     with database() as c:
@@ -141,7 +169,8 @@ def expire_queue():
 
 def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120, story_id=None, require_media=False):
     expired=expire_queue()
-    if live and expired:
+    recovery=recover_stale_attempts() if live else {'quarantined':[],'circuit_opened':False}
+    if live and (expired or recovery['quarantined'] or recovery['circuit_opened']):
         checkpoint()
     row=next_post(story_id)
     if not row:

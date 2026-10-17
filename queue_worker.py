@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import sqlite3
 from pathlib import Path
 import time
 
@@ -42,7 +43,14 @@ def run(state,mode='collect',live=False,auto_like=False):
     else:
         import newsroom
         import postcraft
-        source_report=newsroom.collect()
+        component_errors=[]
+        try:
+            source_report=newsroom.collect()
+        except sqlite3.DatabaseError:
+            raise
+        except Exception as error:
+            source_report={}
+            component_errors.append({'phase':'collection','error_type':type(error).__name__})
         prepared.cleanup_posted()
         client=None
         if os.environ.get('TWEETKIT_COOKIE'):
@@ -50,21 +58,29 @@ def run(state,mode='collect',live=False,auto_like=False):
                 client=automation.authorization()
             except ValueError:
                 pass  # Names remain unchanged if lookup is unavailable.
-        preparation=postcraft.prepare(client=client)
+        try:
+            preparation=postcraft.prepare(client=client)
+        except sqlite3.DatabaseError:
+            raise
+        except Exception as error:
+            # Preparation commits its rebuilt queue atomically; an editorial
+            # failure leaves the previous saved queue available for publication.
+            preparation={'reused_saved_queue':True}
+            component_errors.append({'phase':'preparation','error_type':type(error).__name__})
         collection_ok=bool(source_report) and any('error' not in r for r in source_report.values())
-        newsroom.state_set('automatic_collection',{'bucket':bucket,'attempted':app.now(),'ok':collection_ok,'preparation_version':PREPARATION_VERSION})
+        preparation_ok=not preparation.get('reused_saved_queue',False)
+        newsroom.state_set('automatic_collection',{'bucket':bucket,'attempted':app.now(),'ok':collection_ok and preparation_ok,'preparation_version':PREPARATION_VERSION})
         state.checkpoint()
-        report={'sources':source_report,'preparation':preparation}
-        if source_report and all('error' in r for r in source_report.values()) and not preparation['prepared']:
-            report['ok']=False
+        report={'sources':source_report,'preparation':preparation,'component_errors':component_errors}
         if live:
             report['publication']=prepared.publish_one(state.checkpoint,live=True)
-        if automatic and not collection_ok:
+        if (not collection_ok or not preparation_ok) and not prepared.next_post() and report.get('publication',{}).get('publishing')!='posted':
             report['ok']=False
     if automatic:
         report['automatic_mode']=mode
         report['collection_period_start_utc']=app.dt.datetime.fromtimestamp(bucket*7200,app.UTC).isoformat()
     report['task_seconds']=round(time.monotonic()-start,3)
+    report['health']=prepared.health()
     report.setdefault('ok',not str(report.get('publishing','')).startswith('paused'))
     if str(report.get('publication',{}).get('publishing','')).startswith('paused'):
         report['ok']=False
@@ -83,6 +99,20 @@ def main():
     report['state_and_task_seconds']=round(time.monotonic()-started,3)
     Path('posting-report.json').write_text(json.dumps(report,indent=2))
     print(json.dumps(report,indent=2),flush=True)
+    summary=os.environ.get('GITHUB_STEP_SUMMARY')
+    if summary:
+        publication=report.get('publication',report)
+        with open(summary,'a') as output:
+            output.write('## News publisher\n\nOutcome: '+publication.get('publishing','collection completed')+'\n\n')
+            output.write('Last 24 hours: `'+json.dumps(report['health']['last24h'])+'`\n\n')
+            output.write('Active cooldowns: `'+json.dumps(report['health']['active_cooldowns'])+'`\n')
+            output.write('\nSkipped invalid stories: '+str(len(report.get('preparation',{}).get('skipped_invalid_items',[])))+'\n')
+    if report['health']['active_cooldowns']:
+        print('::warning::Publisher cooldown is active. See the job summary; no rapid retries are performed.',flush=True)
+    if report.get('failure_category') or report.get('publication',{}).get('failure_category'):
+        print('::warning::A posting failure was recorded. The item remains reserved and will not be repeated automatically.',flush=True)
+    if report.get('component_errors') or report.get('preparation',{}).get('skipped_invalid_items') or any('error' in source for source in report.get('sources',{}).values()):
+        print('::warning::A collection or preparation component failed. Other sources and any usable saved queue were allowed to continue.',flush=True)
     if not report['ok']:
         raise SystemExit(1)
 

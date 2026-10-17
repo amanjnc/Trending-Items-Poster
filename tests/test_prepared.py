@@ -147,6 +147,17 @@ class EntityTests(FixtureCase):
         self.assertEqual(postcraft.replace_mentions('Apple pie research and Meta-analysis.',entities),'Apple pie research and Meta-analysis.')
 
 class PreparationTests(FixtureCase):
+    def test_one_malformed_story_does_not_abort_preparing_other_stories(self):
+        self.add('A detailed news item with important context and information for readers.',1,source='A')
+        self.add('Another detailed news item with important context and information for readers.',2,source='B')
+        original=postcraft.compose
+        def compose(row,*args,**kwargs):
+            if row['id']=='1':raise ValueError('bad item')
+            return original(row,*args,**kwargs)
+        with patch('postcraft.compose',side_effect=compose):report=postcraft.prepare()
+        self.assertEqual(report['prepared'],1)
+        self.assertEqual(report['skipped_invalid_items'][0]['story_id'],'1')
+        self.assertEqual(prepared.next_post()['story_id'],'2')
     def test_source_never_repeats_in_two_positions_either_side(self):
         for n in range(16):
             self.add('A detailed news update explains recent developments and important context for readers.',n+1,
@@ -261,6 +272,35 @@ class PreparationTests(FixtureCase):
         self.assertLessEqual(postcraft.weight(linked.rsplit('\n',1)[0])+24,280)
 
 class FastPublisherTests(FixtureCase):
+    def test_watchdog_quarantines_abandoned_attempt_and_posts_different_item(self):
+        first=self.add('An old attempt whose outcome is unknown and must never be repeated.',1,source='A')
+        second=self.add('Another recent story with sufficient context and news detail for publishing.',2,source='B')
+        self.ready(first,'Never resend this',position=0);self.ready(second,'Different safe item',position=1)
+        with prepared.database() as c:
+            c.execute('INSERT INTO publications VALUES(?,?,?,NULL)',(first,app.now()-121,'uncertain'))
+        saves=Mock()
+        with patch('automation.authorization'),patch('automation.send',return_value='123') as send:
+            result=prepared.publish_one(saves,live=True)
+        send.assert_called_once_with('Different safe item')
+        self.assertEqual(result['post_id'],'123')
+        self.assertEqual(prepared.database().execute('SELECT state FROM publications WHERE story_id=?',(first,)).fetchone()[0],'quarantined_uncertain')
+        self.assertEqual(saves.call_count,3)
+    def test_watchdog_leaves_recent_attempt_reserved(self):
+        identity=self.add('A recent attempt which could still be in progress and must not be repeated.')
+        with prepared.database() as c:
+            c.execute('INSERT INTO publications VALUES(?,?,?,NULL)',(identity,app.now()-60,'uncertain'))
+        self.assertEqual(prepared.recover_stale_attempts()['quarantined'],[])
+        self.assertEqual(prepared.database().execute('SELECT state FROM publications').fetchone()[0],'uncertain')
+    def test_three_failures_open_finite_circuit_and_old_errors_cannot_reopen_it(self):
+        now=app.now()
+        with prepared.database() as c:
+            for n in range(3):
+                c.execute('INSERT INTO publications VALUES(?,?,?,NULL)',(str(n),now-300+n,'media_failed'))
+        self.assertTrue(prepared.recover_stale_attempts()['circuit_opened'])
+        with prepared.database() as c:self.assertIn('cooldown',prepared.gate(c,400,0))
+        with patch('app.now',return_value=now+1900):
+            self.assertFalse(prepared.recover_stale_attempts()['circuit_opened'])
+            with prepared.database() as c:self.assertIsNone(prepared.gate(c,400,0))
     def test_failed_upload_is_recorded_without_pausing_the_next_story(self):
         identity=self.add('A detailed news story with enough context for publishing to our readers.',1,source='A')
         next_id=self.add('Another detailed news story with enough context for publishing to our readers.',2,source='B')
@@ -432,6 +472,26 @@ class FastPublisherTests(FixtureCase):
         self.assertEqual(send.call_count,1)
 
 class AutomaticSchedulerTests(FixtureCase):
+    def test_editorial_failure_publishes_saved_queue_and_reports_warning(self):
+        identity=self.add('A saved and verified story with sufficient context and detail for publishing.')
+        self.ready(identity,'Saved draft survives editor failure')
+        with patch('newsroom.collect',return_value={'source':{'added':0}}),patch('postcraft.prepare',side_effect=RuntimeError),patch('automation.authorization'),patch('automation.send',return_value='123') as send:
+            result=queue_worker.run(Mock(),mode='auto',live=True)
+        self.assertTrue(result['ok']);self.assertTrue(result['preparation']['reused_saved_queue'])
+        self.assertEqual(result['component_errors'][0]['phase'],'preparation')
+        send.assert_called_once_with('Saved draft survives editor failure')
+    def test_collector_failure_does_not_prevent_publishing_existing_draft(self):
+        identity=self.add('A saved and verified story with sufficient context and detail for publishing.')
+        self.ready(identity,'Saved draft survives collector failure')
+        with patch('newsroom.collect',side_effect=RuntimeError),patch('postcraft.prepare',return_value={'prepared':1}),patch('automation.authorization'),patch('automation.send',return_value='123') as send:
+            result=queue_worker.run(Mock(),mode='auto',live=True)
+        self.assertTrue(result['ok']);self.assertEqual(result['component_errors'][0]['phase'],'collection')
+        send.assert_called_once_with('Saved draft survives collector failure')
+    def test_database_failure_is_not_bypassed_to_publish_without_reliable_history(self):
+        import sqlite3
+        with patch('newsroom.collect',side_effect=sqlite3.DatabaseError),patch('automation.send') as send:
+            with self.assertRaises(sqlite3.DatabaseError):queue_worker.run(Mock(),mode='auto',live=True)
+        send.assert_not_called()
     def test_old_queue_version_forces_refresh_before_more_publishing(self):
         now=app.now()
         newsroom.state_set('automatic_collection',dict(bucket=int(now//7200),attempted=now,ok=True,preparation_version=1))

@@ -330,40 +330,44 @@ def prepare(client=None, selected_source=None):
         source_media={r['story_id']:r['media_url'] for r in c.execute('SELECT story_id,media_url FROM story_media')}
         attachments={r['story_id']:dict(r) for r in c.execute('SELECT * FROM story_attachments')}
     candidates=[]
+    skipped_items=[]
     for row in rows:
-        expires,hours=lifetime(row)
-        if expires<=app.now():
-            continue
-        extra=enrich.get(row['id'],{'context':row['body'],'media_url':None})
-        image=source_media.get(row['id']) or extra['media_url'] or media.get(row['id'])
-        attachment=attachments.get(row['id'])
-        video=bool(attachment and attachment['kind']=='video')
-        if video:
-            image=attachment['url']  # Never substitute a video poster as a photo.
-        elif attachment and attachment['kind']=='none':
-            image=None
-        image=image if prepared.media_allowed(image) else None
-        needs_link=bool(re.search(r'\b(?:download (?:it|the (?:app|report))|read the full (?:report|study)|apply (?:here|now))\b',row['body'],re.I))
-        urls=[]
-        for url in re.findall(r'https?://[^\s<>]+',row['body']):
-            try:
-                urls.append(app.clean_url(url.rstrip('.,);]')))
-            except ValueError:
-                pass
-        internal=next((u for u in urls if urllib.parse.urlsplit(u).hostname in ('x.com','www.x.com','twitter.com','www.twitter.com')),None)
-        selected_url=(urls[0] if urls else row['url']) if needs_link else internal
-        external=bool(selected_url and urllib.parse.urlsplit(selected_url).hostname not in ('x.com','www.x.com','twitter.com','www.twitter.com'))
-        fmt=(('text_video' if video else 'text_image') if image else 'text')+('_link' if external else '')
-        text=compose(row|({'outbound_url':selected_url} if selected_url else {}),entities,extra['context'],bool(selected_url))
-        age=max(0,(app.now()-row['published'])/3600)
-        format_bonus=FORMAT_ORDER[fmt]*4
-        quality=min(10,len(row['body'].split())/5)
-        base=60/(1+age/6)+25*(row['priority']-1)+min(15,math.log1p(row['views']))+min(15,max(0,row['coverage']-1)*5)+quality+format_bonus
-        # Urgency cannot rescue a weak item and never dominates the score.
-        remaining=expires-app.now()
-        urgency=min(5,max(0,1-remaining/(hours*3600))*5) if base>=35 else 0
-        reasons=dict(format_tier=FORMAT_ORDER[fmt],freshness=round(60/(1+age/6),2),source_bonus=25*(row['priority']-1),format_bonus=format_bonus,urgency=round(urgency,2),expires_in_hours=round(remaining/3600,2))
-        candidates.append(dict(story_id=row['id'],text=text,media_url=image,source_url=row['url'],format=fmt,rank=round(base+urgency,2),expires_at=expires,reasons=reasons,source=row['source'],event=event_key(row)))
+        try:
+            expires,hours=lifetime(row)
+            if expires<=app.now():
+                continue
+            extra=enrich.get(row['id'],{'context':row['body'],'media_url':None})
+            image=source_media.get(row['id']) or extra['media_url'] or media.get(row['id'])
+            attachment=attachments.get(row['id'])
+            video=bool(attachment and attachment['kind']=='video')
+            if video:
+                image=attachment['url']  # Never substitute a video poster as a photo.
+            elif attachment and attachment['kind']=='none':
+                image=None
+            image=image if prepared.media_allowed(image) else None
+            needs_link=bool(re.search(r'\b(?:download (?:it|the (?:app|report))|read the full (?:report|study)|apply (?:here|now))\b',row['body'],re.I))
+            urls=[]
+            for url in re.findall(r'https?://[^\s<>]+',row['body']):
+                try:
+                    urls.append(app.clean_url(url.rstrip('.,);]')))
+                except ValueError:
+                    pass
+            internal=next((u for u in urls if urllib.parse.urlsplit(u).hostname in ('x.com','www.x.com','twitter.com','www.twitter.com')),None)
+            selected_url=(urls[0] if urls else row['url']) if needs_link else internal
+            external=bool(selected_url and urllib.parse.urlsplit(selected_url).hostname not in ('x.com','www.x.com','twitter.com','www.twitter.com'))
+            fmt=(('text_video' if video else 'text_image') if image else 'text')+('_link' if external else '')
+            text=compose(row|({'outbound_url':selected_url} if selected_url else {}),entities,extra['context'],bool(selected_url))
+            age=max(0,(app.now()-row['published'])/3600)
+            format_bonus=FORMAT_ORDER[fmt]*4
+            quality=min(10,len(row['body'].split())/5)
+            base=60/(1+age/6)+25*(row['priority']-1)+min(15,math.log1p(row['views']))+min(15,max(0,row['coverage']-1)*5)+quality+format_bonus
+            # Urgency cannot rescue a weak item and never dominates the score.
+            remaining=expires-app.now()
+            urgency=min(5,max(0,1-remaining/(hours*3600))*5) if base>=35 else 0
+            reasons=dict(format_tier=FORMAT_ORDER[fmt],freshness=round(60/(1+age/6),2),source_bonus=25*(row['priority']-1),format_bonus=format_bonus,urgency=round(urgency,2),expires_in_hours=round(remaining/3600,2))
+            candidates.append(dict(story_id=row['id'],text=text,media_url=image,source_url=row['url'],format=fmt,rank=round(base+urgency,2),expires_at=expires,reasons=reasons,source=row['source'],event=event_key(row)))
+        except (ValueError,TypeError,KeyError,OverflowError) as error:
+            skipped_items.append({'story_id':row.get('id'),'error_type':type(error).__name__})
     # Interleave sources and separate quotes from the same event before saving order.
     ordered=[]
     with newsroom.database() as c:
@@ -394,7 +398,7 @@ def prepare(client=None, selected_source=None):
         for position,row in enumerate(ordered):
             position=positions.get(row['story_id'],position) if selected_source else position
             c.execute('INSERT INTO prepared_posts VALUES(?,?,?,?,?,?,?,?,?,?)',(row['story_id'],row['text'],row['media_url'],row['source_url'],row['format'],row['rank'],row['expires_at'],position,json.dumps(row['reasons']),app.now()))
-    return {'prepared':len(ordered),'deferred_for_source_spacing':len(candidates),'verified_handles':['@'+e['handle'] for e in entities],
+    return {'prepared':len(ordered),'skipped_invalid_items':skipped_items,'deferred_for_source_spacing':len(candidates),'verified_handles':['@'+e['handle'] for e in entities],
             'identity_resolution':newsroom.state_get('identity_resolution',{}),
             'identity_discovery':newsroom.state_get('identity_discovery_report',{}),
             'top5':[dict(text=r['text'],format=r['format'],rank=r['rank'],source_url=r['source_url'],reasons=r['reasons']) for r in ordered[:5]],
