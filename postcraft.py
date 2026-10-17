@@ -274,10 +274,6 @@ def lifetime(row):
         hours=6
     elif re.search(r'\b(?:stock price|share price|bitcoin price|crypto price|market update|tonight|this morning)\b',body):
         hours=12
-    elif re.search(r'\b(?:how to|explainer|research|discovery|guide|hands.on review|in.depth review)\b|^why\b|\breview(?: of|:|$)',body):
-        hours=120
-    elif re.search(r'\b(?:launch|released|announced|partnership|funding|startup|model)\b',body):
-        hours=48
     else:
         hours=24
     expires=row['published']+hours*3600
@@ -294,7 +290,7 @@ def lifetime(row):
             expires=min(expires,stamp)
         except ValueError:
             pass
-    return min(expires,row['published']+5*86400),hours
+    return min(expires,row['published']+86400),hours
 
 
 def event_key(row):
@@ -306,12 +302,13 @@ def event_key(row):
 
 def prepare(client=None, selected_source=None):
     """Prepare and materialize the full ordered queue, only at collection time."""
+    prepared.expire_queue()
     with newsroom.database() as c:
         rows=[dict(r) for r in c.execute('''SELECT s.*,n.body,n.priority,n.views,
             (SELECT COUNT(DISTINCT source) FROM observations o WHERE o.story_id=s.id) AS coverage
             FROM stories s JOIN news_items n ON n.story_id=s.id LEFT JOIN publications p ON p.story_id=s.id
             WHERE p.story_id IS NULL AND s.status IN ('new','approved') AND s.published BETWEEN ? AND ?
-            AND (? IS NULL OR s.url=?)''',(app.now()-5*86400,app.now(),selected_source,selected_source))]
+            AND (? IS NULL OR s.url=?)''',(app.now()-86400,app.now(),selected_source,selected_source))]
     rows=[r for r in rows if not re.search(r'\b(?:coupon|promo code|discount|deal sale|limited.time offer)\b',r['body'],re.I)]
     enrich={}
     # Only a bounded number of external article reads; Telegram already supplies text.
@@ -374,8 +371,11 @@ def prepare(client=None, selected_source=None):
     recent_sources=[r['source'] for r in reversed(previous[:2])]
     recent_events=[event_key(r) if r['body'] else '' for r in reversed(previous)]
     while candidates:
-        selected=max(candidates,key=lambda r:(FORMAT_ORDER[r['format']],r['rank']-(20 if recent_sources[-2:]==[r['source']]*2 else 0)-(15 if r['event'] and r['event'] in recent_events[-5:] else 0)))
-        source_penalty=20 if recent_sources[-2:]==[selected['source']]*2 else 0
+        eligible=[r for r in candidates if r['source'] not in recent_sources[-2:]]
+        if not eligible:
+            break
+        selected=max(eligible,key=lambda r:(FORMAT_ORDER[r['format']],r['rank']-(15 if r['event'] and r['event'] in recent_events[-5:] else 0)))
+        source_penalty=0
         event_penalty=15 if selected['event'] and selected['event'] in recent_events[-5:] else 0
         selected['reasons'].update(source_diversity_penalty=source_penalty,event_diversity_penalty=event_penalty,
                                    selection_score=round(selected['rank']-source_penalty-event_penalty,2))
@@ -394,7 +394,7 @@ def prepare(client=None, selected_source=None):
         for position,row in enumerate(ordered):
             position=positions.get(row['story_id'],position) if selected_source else position
             c.execute('INSERT INTO prepared_posts VALUES(?,?,?,?,?,?,?,?,?,?)',(row['story_id'],row['text'],row['media_url'],row['source_url'],row['format'],row['rank'],row['expires_at'],position,json.dumps(row['reasons']),app.now()))
-    return {'prepared':len(ordered),'verified_handles':['@'+e['handle'] for e in entities],
+    return {'prepared':len(ordered),'deferred_for_source_spacing':len(candidates),'verified_handles':['@'+e['handle'] for e in entities],
             'identity_resolution':newsroom.state_get('identity_resolution',{}),
             'identity_discovery':newsroom.state_get('identity_discovery_report',{}),
             'top5':[dict(text=r['text'],format=r['format'],rank=r['rank'],source_url=r['source_url'],reasons=r['reasons']) for r in ordered[:5]],

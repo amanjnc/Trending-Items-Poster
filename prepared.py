@@ -28,8 +28,10 @@ def next_post(story_id=None):
     with database() as c:
         row = c.execute('''SELECT q.* FROM prepared_posts q JOIN stories s ON s.id=q.story_id
             LEFT JOIN publications p ON p.story_id=q.story_id
-            WHERE p.story_id IS NULL AND s.status IN ('new','approved') AND q.expires_at>?
-            AND (? IS NULL OR q.story_id=?) ORDER BY q.position LIMIT 1''', (app.now(),story_id,story_id)).fetchone()
+            WHERE p.story_id IS NULL AND s.status IN ('new','approved') AND q.expires_at>? AND s.published>?
+            AND s.source NOT IN (SELECT s2.source FROM publications p2 JOIN stories s2 ON s2.id=p2.story_id
+                WHERE p2.state="posted" ORDER BY p2.attempted DESC LIMIT 2)
+            AND (? IS NULL OR q.story_id=?) ORDER BY q.position LIMIT 1''', (app.now(),app.now()-86400,story_id,story_id)).fetchone()
     return dict(row) if row else None
 
 
@@ -103,10 +105,27 @@ def cleanup_posted():
     return removed
 
 
+def expire_queue():
+    """Remove expired pending payloads, retaining small URL/dedup history."""
+    with database() as c:
+        ids=[r[0] for r in c.execute('''SELECT s.id FROM stories s LEFT JOIN prepared_posts q ON q.story_id=s.id
+            LEFT JOIN publications p ON p.story_id=s.id WHERE p.story_id IS NULL AND s.status IN ('new','approved')
+            AND (s.published<=? OR q.expires_at<=?)''',(app.now()-86400,app.now()))]
+        for identity in ids:
+            c.execute('UPDATE stories SET status="expired",title=substr(title,1,280) WHERE id=?',(identity,))
+            for table in ('prepared_posts','story_media','story_attachments','news_items'):
+                if c.execute('SELECT 1 FROM sqlite_master WHERE type="table" AND name=?',(table,)).fetchone():
+                    c.execute('DELETE FROM '+table+' WHERE story_id=?',(identity,))
+    return len(ids)
+
+
 def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120, story_id=None, require_media=False):
+    expired=expire_queue()
+    if live and expired:
+        checkpoint()
     row=next_post(story_id)
     if not row:
-        return {'publishing':'queue empty or expired'}
+        return {'publishing':'queue empty, expired, or waiting for source diversity'}
     if not live:
         return {'publishing':'preview','draft':row['text'],'format':row['format'],'rank':row['rank'],'expires_at':row['expires_at'],'source_url':row['source_url']}
     with database() as c:
@@ -129,7 +148,8 @@ def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120, story_id=N
             blocked=gate(c,daily_limit,min_gap)
             if blocked:
                 return {'publishing':blocked}
-            if row['expires_at']<=app.now():
+            source_time=c.execute('SELECT published FROM stories WHERE id=?',(row['story_id'],)).fetchone()[0]
+            if row['expires_at']<=app.now() or source_time<=app.now()-86400:
                 return {'publishing':'candidate expired; exiting'}
             if not c.execute('INSERT OR IGNORE INTO publications VALUES(?,?,?,NULL)',(row['story_id'],app.now(),'uncertain')).rowcount:
                 return {'publishing':'already reserved'}

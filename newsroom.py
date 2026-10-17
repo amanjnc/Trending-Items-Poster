@@ -161,7 +161,7 @@ def telegram(channel, pages=3, message_id=None):
         if not ids or str(min(ids)) == before:
             break
         before = str(min(ids))
-        if rows and max(r['published'] for r in rows[-len(messages):]) < app.now()-5*86400:
+        if rows and max(r['published'] for r in rows[-len(messages):]) < app.now()-86400:
             break
     return rows
 
@@ -224,7 +224,7 @@ def enqueue(rows, priority, handles):
     for row in rows:
         body = clean_text(row['title'], handles)
         stamp = row['published']
-        if len(signature(body).split()) < 7 or len(body) < 45 or stamp < app.now()-5*86400 or stamp > app.now()+60:
+        if len(signature(body).split()) < 7 or len(body) < 45 or stamp <= app.now()-86400 or stamp > app.now()+60:
             counts['rejected'] += 1
             continue
         try:
@@ -239,9 +239,9 @@ def enqueue(rows, priority, handles):
             if known:
                 c.execute('UPDATE news_items SET views=MAX(views,?) WHERE story_id=?', (row.get('views',0),known[0]))
                 if row.get('media_url') or 'attachment_kind' in row:
-                    selected=c.execute('SELECT source FROM stories WHERE id=?',(known[0],)).fetchone()
+                    selected=c.execute('SELECT source,status FROM stories WHERE id=?',(known[0],)).fetchone()
                     posted=c.execute('SELECT 1 FROM publications WHERE story_id=?',(known[0],)).fetchone()
-                    if selected and selected[0]==row['source'] and not posted:
+                    if selected and selected[0]==row['source'] and selected[1] in ('new','approved') and not posted:
                         save_attachment(c,known[0],row)
                 counts['duplicates'] += 1
                 continue

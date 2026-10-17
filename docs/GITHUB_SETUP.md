@@ -62,7 +62,7 @@ Editing is deterministic and free: concise wording, source-footer removal, relev
 
 ## Images and links
 
-The queue uses this strict format order: **text + image > text > text + image + outbound link > text + outbound link**. Freshness, source priority, content detail and diversity order items within each format; they cannot move a lower format above a higher one. Expiry and promotional-content filters apply before ranking.
+Among candidates eligible under the hard source-spacing rule, the queue uses this format order: **text + image > text > text + image + outbound link > text + outbound link**. Freshness, source priority and content detail order items within each format. Source spacing is a hard constraint and takes priority over format preference. Expiry and promotional-content filters apply before ranking.
 
 The collector captures Telegram photo references and supported RSS/publisher image URLs. Telegram's `telesco.pe` and `cdn-telegram.org` image hosts are supported. One image can be uploaded with a post. Binary media is not packed into the Git history database: the publisher fetches the one selected image from a restricted source-host allowlist and uploads it to X. Redirects, format signatures and a 2.5 MB cap are checked. This extra network work can make image posts slower than text-only posts. Missing/unsupported images fall back to text before sending; failures after a public send attempt pause rather than risking a duplicate.
 
@@ -74,17 +74,17 @@ After a confirmed successful post, its prepared queue payload, source media refe
 
 ## Ranking, age and expiration
 
-At collection time all eligible candidates are prepared and ranked once. Freshness, ClashReport priority, available Telegram views, source coverage, content detail, format bonus and source/event diversity determine the saved order. A small urgency bonus is capped at five points and applies only to sufficiently strong candidates. It never overrides hard expiration.
+At collection time all eligible candidates are prepared and ranked once. Freshness, ClashReport priority, available Telegram views, source coverage, content detail, format bonus and source/event diversity determine the saved order. No source may repeat within two positions on either side of an item: rank 6 must differ from ranks 4, 5, 7 and 8. At least two other posts separate repeats. The last two actual publications seed ordering across collections, and posting checks them again in case queued items expire. If no source fits, remaining candidates are deferred until a later preparation; no spacing exception or filler is used. Reports include the deferred count. A small urgency bonus is capped at five points and applies only to sufficiently strong candidates. It never overrides hard expiration.
 
 Typical shelf lives:
 
 - Six hours: outages, evacuation/weather/air-raid alerts and live results.
 - Twelve hours: market-price updates and explicitly short-lived phrasing.
 - Twenty-four hours: ordinary news.
-- Forty-eight hours: launches, releases, funding and partnership news.
-- Up to five days: selected research, explainers, reviews and guides.
+- At most 24 hours: launches, releases, funding and partnership news.
+- At most 24 hours: every item, including research, explainers, reviews, guides and business launches.
 
-Supported explicit relative/ISO-dated event deadlines shorten those limits. These are heuristic relevance rules, not comprehensive event understanding. No item remains eligible beyond five days. The publisher only performs a cheap expiration/eligibility check; it does not rerank. Very small queues can run empty, and no duplicate filler posts are created.
+Supported explicit relative/ISO-dated event deadlines shorten those limits. These are heuristic relevance rules, not comprehensive event understanding. No item remains eligible at or beyond 24 hours from its source timestamp. Collection and publishing delete expired pending queue rows, duplicate editorial bodies and media/attachment references, retaining small URL/deduplication history. Legacy five-day drafts are also blocked and cleaned up. The publisher only performs a cheap expiration/eligibility check; it does not rerank. Very small queues can run empty, and no duplicate filler posts are created.
 
 ## Reply likes
 

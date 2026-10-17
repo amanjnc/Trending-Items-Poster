@@ -24,13 +24,13 @@ class FixtureCase(unittest.TestCase):
     def tearDown(self):
         app.DB=self.old
         self.tmp.cleanup()
-    def add(self,text,number=1,age=0,media=None):
+    def add(self,text,number=1,age=0,media=None,source="Telegram @ClashReport"):
         url=f'https://t.me/ClashReport/{number}'
         identity=str(number)
         with newsroom.database() as c:
-            c.execute('INSERT INTO stories(id,title,url,source,published,collected,score) VALUES(?,?,?,?,?,?,?)',(identity,text,url,'Telegram @ClashReport',app.now()-age,app.now(),0))
+            c.execute('INSERT INTO stories(id,title,url,source,published,collected,score) VALUES(?,?,?,?,?,?,?)',(identity,text,url,source,app.now()-age,app.now(),0))
             c.execute('INSERT INTO news_items VALUES(?,?,?,?,?)',(identity,text,str(number),1.8,0))
-            c.execute('INSERT INTO observations VALUES(?,?,?)',(url,identity,'Telegram @ClashReport'))
+            c.execute('INSERT INTO observations VALUES(?,?,?)',(url,identity,source))
             if media:
                 c.execute('INSERT INTO story_media VALUES(?,?)',(identity,media))
         return identity
@@ -147,6 +147,31 @@ class EntityTests(FixtureCase):
         self.assertEqual(postcraft.replace_mentions('Apple pie research and Meta-analysis.',entities),'Apple pie research and Meta-analysis.')
 
 class PreparationTests(FixtureCase):
+    def test_source_never_repeats_in_two_positions_either_side(self):
+        for n in range(16):
+            self.add('A detailed news update explains recent developments and important context for readers.',n+1,
+                     source='Source '+str(n%4),media='https://cdn4.telesco.pe/image.jpg' if n%4==0 else None)
+        report=postcraft.prepare()
+        self.assertEqual(report['prepared'],16)
+        with prepared.database() as c:
+            sources=[r[0] for r in c.execute('SELECT s.source FROM prepared_posts q JOIN stories s ON s.id=q.story_id ORDER BY position')]
+        for i,source in enumerate(sources):
+            self.assertNotIn(source,sources[max(0,i-2):i])
+            self.assertNotIn(source,sources[i+1:i+3])
+    def test_insufficient_source_diversity_defers_items_without_relaxing_rule(self):
+        for n,source in enumerate(['A','A','B','B']):
+            self.add('A detailed news update explains recent developments and important context for readers.',n+1,source=source)
+        report=postcraft.prepare()
+        self.assertEqual(report['prepared'],2)
+        self.assertEqual(report['deferred_for_source_spacing'],2)
+    def test_order_starts_after_last_two_published_sources(self):
+        for n,source in enumerate(['A','B','A','B','C']):
+            identity=self.add('A detailed news update explains recent developments and important context for readers.',n+1,source=source)
+            if n<2:
+                with prepared.database() as c:
+                    c.execute('INSERT INTO publications VALUES(?,?,?,?)',(identity,app.now()-300+n*100,'posted',str(n+100)))
+        postcraft.prepare()
+        self.assertEqual(prepared.next_post()['story_id'],'5')
     def test_source_paragraphs_have_one_blank_line_between_them(self):
         body="Canada's Carney:\nIf they're ready to move, we'll move.\n\nLook, life's too short to play around other countries' political timing.\nWe're ready to do a deal if the U.S. is going to negotiate in good faith."
         entities=[dict(names=["Canada's Carney"],handle='MarkJCarney')]
@@ -162,10 +187,10 @@ class PreparationTests(FixtureCase):
     def test_strict_four_format_order_overrides_freshness_and_diversity(self):
         # The oldest, lower-scored image still precedes the newest text-only item.
         base='A detailed research guide explains the future of battery technology and energy storage.'
-        self.add(base+' Read the full report for details.',1,media='https://cdn4.telesco.pe/file/one.jpg')
-        self.add(base,2)
-        self.add(base+' Read the full report for details.',3)
-        self.add(base,4,age=3*86400,media='https://cdn4.telesco.pe/file/four.jpg')
+        self.add(base+' Read the full report for details.',1,media='https://cdn4.telesco.pe/file/one.jpg',source='Source A')
+        self.add(base,2,source="Source B")
+        self.add(base+' Read the full report for details.',3,source='Source C')
+        self.add(base,4,age=18*3600,media='https://cdn4.telesco.pe/file/four.jpg',source='Source D')
         postcraft.prepare()
         with prepared.database() as c:
             formats=[r[0] for r in c.execute('SELECT format FROM prepared_posts ORDER BY position')]
@@ -192,24 +217,24 @@ class PreparationTests(FixtureCase):
         self.assertEqual(prepared.next_post()['format'],'text_image')
     def test_link_format_is_ranked_below_equivalent_link_free_post(self):
         self.add('A new research report explains battery technology and its role in the future of electric vehicles.',1)
-        self.add('A new research report explains battery technology. Read the full report for detailed results.',2)
+        self.add('A new research report explains battery technology. Read the full report for detailed results.',2,source='Source B')
         report=postcraft.prepare()
         formats={r['format']:r['rank'] for r in report['top5']}
         self.assertGreater(formats['text'],formats['text_link'])
     def test_time_bound_outage_expired_but_evergreen_not(self):
         now=app.now()
         outage=dict(body='A major network outage disrupted services.',published=now-7*3600)
-        guide=dict(body='A research guide explaining battery chemistry.',published=now-3*86400)
+        guide=dict(body='A research guide explaining battery chemistry.',published=now-18*3600)
         self.assertLess(postcraft.lifetime(outage)[0],now)
         self.assertGreater(postcraft.lifetime(guide)[0],now)
-    def test_three_day_old_research_can_remain_but_six_day_old_item_cannot(self):
-        self.add('A research guide explaining a new approach to energy storage for homes and businesses.',1,age=3*86400)
-        self.add('A research guide explaining a different approach to energy storage for homes and businesses.',2,age=6*86400)
+    def test_eighteen_hour_old_research_can_remain_but_one_day_old_cannot(self):
+        self.add('A research guide explaining a new approach to energy storage for homes and businesses.',1,age=18*3600)
+        self.add('A research guide explaining a different approach to energy storage for homes and businesses.',2,age=86400)
         self.assertEqual(postcraft.prepare()['prepared'],1)
         self.assertEqual(prepared.next_post()['story_id'],'1')
-    def test_no_item_lives_beyond_five_days(self):
+    def test_no_item_lives_beyond_one_day(self):
         row=dict(body='An evergreen research guide.',published=app.now())
-        self.assertLessEqual(postcraft.lifetime(row)[0],row['published']+5*86400)
+        self.assertLessEqual(postcraft.lifetime(row)[0],row['published']+86400)
     def test_relative_deadline_expires_at_event_time(self):
         row=dict(body='Registration closes in 2 hours for the event.',published=app.now())
         self.assertEqual(postcraft.lifetime(row)[0],row['published']+7200)
@@ -236,6 +261,29 @@ class PreparationTests(FixtureCase):
         self.assertLessEqual(postcraft.weight(linked.rsplit('\n',1)[0])+24,280)
 
 class FastPublisherTests(FixtureCase):
+    def test_one_day_old_payload_is_deleted_even_when_legacy_expiry_allows_five_days(self):
+        identity=self.add('A detailed old research guide with sufficient context and information for readers.',age=86400,
+                          media='https://cdn4.telesco.pe/old.jpg')
+        self.ready(identity,expires=app.now()+4*86400)
+        saved=Mock()
+        with patch('automation.authorization') as auth,patch('automation.send') as send:
+            prepared.publish_one(saved,live=True)
+        auth.assert_not_called();send.assert_not_called();saved.assert_called_once()
+        with newsroom.database() as c:
+            for table in ('prepared_posts','news_items','story_media'):
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM '+table+' WHERE story_id=?',(identity,)).fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT status FROM stories WHERE id=?',(identity,)).fetchone()[0],'expired')
+    def test_expiring_bridge_does_not_allow_repeated_actual_source(self):
+        old=self.add('A detailed previously published story about recent developments for readers.',1,source='A')
+        repeat=self.add('A detailed fresh story from the same source about other developments for readers.',2,source='A')
+        other=self.add('A detailed fresh story from a different source about recent developments for readers.',3,source='B')
+        with prepared.database() as c:
+            c.execute('INSERT INTO publications VALUES(?,?,?,?)',(old,app.now()-300,'posted','123'))
+        self.ready(repeat,'Same source queued first',position=0)
+        self.ready(other,'Different source queued next',position=1)
+        with patch('automation.authorization'),patch('automation.send',return_value='456') as send:
+            prepared.publish_one(lambda:None,live=True)
+        send.assert_called_once_with('Different source queued next')
     def test_download_requires_video_signature_and_enforces_size_limit(self):
         with patch('urllib.request.build_opener') as opener:
             response=opener.return_value.open.return_value.__enter__.return_value
@@ -470,7 +518,7 @@ class SelectedPostTests(FixtureCase):
         client.user_profile.return_value=dict(ok=True,id='123',username='MarkJCarney',name='Mark Carney')
         return client
     def test_explicit_selection_sends_requested_quote_not_queue_head(self):
-        wrong=self.add('A completely different queued story that must not be sent during this test.')
+        wrong=self.add('A completely different queued story that must not be sent during this test.',source='Other Source')
         self.ready(wrong,'Wrong queue head')
         state=Mock()
         with patch('newsroom.telegram',return_value=[self.source_row()]) as source,patch('automation.authorization',return_value=self.client()),patch('automation.send',return_value='999') as send:

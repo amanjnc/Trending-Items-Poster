@@ -126,7 +126,8 @@ class SchedulingTests(DatabaseCase):
         collector.assert_called_once()
         send.assert_called_once()
         sleep.assert_not_called()
-        self.assertEqual(report['preparation']['prepared'],2)
+        self.assertEqual(report['preparation']['prepared'],1)
+        self.assertEqual(report['preparation']['deferred_for_source_spacing'],1)
         self.assertEqual(report['publication']['publishing'],'posted')
     def test_reservation_saved_before_send_and_restored_interval_enforced(self):
         self.add()
