@@ -96,6 +96,14 @@ class EntityTests(FixtureCase):
         self.assertEqual(postcraft.replace_mentions('Apple pie research and Meta-analysis.',entities),'Apple pie research and Meta-analysis.')
 
 class PreparationTests(FixtureCase):
+    def test_country_abbreviation_stays_in_sentence(self):
+        body='Canada trades more with the U.S. than elsewhere.'
+        self.assertEqual(postcraft.compose({'body':body,'url':'https://example.com'},[]),body)
+        long_body=body+' '+('Further details follow. '*30)
+        result=postcraft.compose({'body':long_body,'url':'https://example.com'},[])
+        self.assertIn(body,result)
+        self.assertLessEqual(postcraft.weight(result),280)
+
     def test_prepared_posts_omit_external_links_by_default(self):
         self.add('A new research team announced findings that could improve batteries used in electric vehicles.')
         report=postcraft.prepare()

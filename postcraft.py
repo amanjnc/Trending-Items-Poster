@@ -209,7 +209,7 @@ def compose(row,entities,context='',include_link=False):
     text=re.sub(r'\bwants to take on the longevity-startup crowd\b','wants to challenge longevity startups',text,flags=re.I)
     budget=256 if include_link else 280
     if weight(text)>budget:
-        sentences=re.split(r'(?<=[.!?])\s+',text)
+        sentences=re.split(r'(?<=[.!?])(?<!\b[A-Z]\.)\s+',text)
         chosen=''
         for sentence in sentences:
             candidate=(chosen+' '+sentence).strip()
@@ -224,9 +224,6 @@ def compose(row,entities,context='',include_link=False):
                 chosen=candidate
             chosen+='…'
         text=chosen
-    sentences=re.split(r'(?<=[.!?])\s+',text,maxsplit=1)
-    if len(sentences)==2 and weight(text)+1<=budget:
-        text=sentences[0]+'\n\n'+sentences[1]
     return text+('\n'+row.get('outbound_url',row['url']) if include_link else '')
 
 
