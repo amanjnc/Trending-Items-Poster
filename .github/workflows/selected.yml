@@ -1,0 +1,44 @@
+name: Publish a selected story
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: 'Exact configured Telegram message URL'
+        type: string
+        default: 'https://t.me/ClashReport/101477'
+        required: true
+      live:
+        description: 'Publish this ONE selected item (off = preview and inspect media)'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: x-autopost-history
+  cancel-in-progress: false
+jobs:
+  selected:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-runtime
+      - name: Verify source attachment and mentions, then handle selected item
+        env:
+          TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
+          TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
+          SOURCE_URL: ${{ inputs.source_url }}
+          LIVE: ${{ inputs.live }}
+        shell: bash
+        run: |
+          args=(--source-url "$SOURCE_URL")
+          if [[ "$LIVE" == "true" ]]; then args+=(--live); fi
+          .local/runtime/bin/python selected_post.py "${args[@]}"
+      - name: Save selected item and media report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selected-${{ github.run_id }}-${{ github.run_attempt }}
+          path: posting-report.json
+          if-no-files-found: ignore
+          retention-days: 7

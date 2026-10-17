@@ -12,6 +12,7 @@ import newsroom
 import postcraft
 import prepared
 import queue_worker
+import selected_post
 
 class FixtureCase(unittest.TestCase):
     def setUp(self):
@@ -129,6 +130,18 @@ class EntityTests(FixtureCase):
         self.assertEqual(postcraft.replace_mentions('Apple pie research and Meta-analysis.',entities),'Apple pie research and Meta-analysis.')
 
 class PreparationTests(FixtureCase):
+    def test_source_paragraphs_have_one_blank_line_between_them(self):
+        body="Canada's Carney:\nIf they're ready to move, we'll move.\n\nLook, life's too short to play around other countries' political timing.\nWe're ready to do a deal if the U.S. is going to negotiate in good faith."
+        entities=[dict(names=["Canada's Carney"],handle='MarkJCarney')]
+        final=postcraft.compose({'body':body,'url':'https://example.com'},entities)
+        self.assertEqual(final,"@MarkJCarney:\n\nIf they're ready to move, we'll move.\n\nLook, life's too short to play around other countries' political timing.\n\nWe're ready to do a deal if the U.S. is going to negotiate in good faith.")
+        self.assertNotIn('\n\n\n',final)
+    def test_paragraphs_survive_both_sentence_and_word_length_trimming(self):
+        for body in ('First paragraph ends here.\nSecond paragraph has essential details.\n'+('More details follow. '*30),
+                     'First paragraph without a full stop\n'+('more details '*40)):
+            result=postcraft.compose({'body':body,'url':'https://example.com'},[])
+            self.assertIn('\n\n',result)
+            self.assertLessEqual(postcraft.weight(result),280)
     def test_strict_four_format_order_overrides_freshness_and_diversity(self):
         # The oldest, lower-scored image still precedes the newest text-only item.
         base='A detailed research guide explains the future of battery technology and energy storage.'
@@ -206,6 +219,51 @@ class PreparationTests(FixtureCase):
         self.assertLessEqual(postcraft.weight(linked.rsplit('\n',1)[0])+24,280)
 
 class FastPublisherTests(FixtureCase):
+    def test_download_requires_video_signature_and_enforces_size_limit(self):
+        with patch('urllib.request.build_opener') as opener:
+            response=opener.return_value.open.return_value.__enter__.return_value
+            response.read.return_value=b'\x00\x00\x00\x18ftypmp42'+b'video payload'
+            path=prepared.download_media('https://cdn4.telesco.pe/movie.mp4',self.tmp.name,video=True)
+            self.assertEqual(path.suffix,'.mp4')
+            response.read.assert_called_once_with(20_000_001)
+            response.read.return_value=b'\xff\xd8\xffphoto is not a video'
+            with self.assertRaisesRegex(ValueError,'video content'):
+                prepared.download_media('https://cdn4.telesco.pe/movie.mp4',self.tmp.name,video=True)
+            response.read.return_value=b'x'*20_000_001
+            with self.assertRaisesRegex(ValueError,'too large'):
+                prepared.download_media('https://cdn4.telesco.pe/movie.mp4',self.tmp.name,video=True)
+    def test_success_removes_payloads_but_keeps_duplicate_and_reply_history(self):
+        identity=self.add('A carefully sourced news item with substantial context and sufficient detail.',media='https://cdn4.telesco.pe/photo.jpg')
+        self.ready(identity)
+        with newsroom.database() as c:
+            c.execute('INSERT INTO story_attachments VALUES(?,?,?)',(identity,'image','https://cdn4.telesco.pe/photo.jpg'))
+        with patch('automation.authorization'),patch('automation.send',return_value='123'):
+            prepared.publish_one(lambda:None,live=True)
+        with newsroom.database() as c:
+            for table in ('prepared_posts','story_media','story_attachments','news_items'):
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM '+table+' WHERE story_id=?',(identity,)).fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT post_id FROM publications WHERE story_id=?',(identity,)).fetchone()[0],'123')
+            self.assertIsNotNone(c.execute('SELECT id FROM stories WHERE id=?',(identity,)).fetchone())
+            self.assertIsNotNone(c.execute('SELECT url FROM observations WHERE story_id=?',(identity,)).fetchone())
+    def test_uncertain_send_preserves_payload_for_reconciliation(self):
+        identity=self.add('A carefully sourced news item with substantial context and sufficient detail.')
+        self.ready(identity)
+        with patch('automation.authorization'),patch('automation.send',side_effect=TimeoutError):
+            prepared.publish_one(lambda:None,live=True)
+        self.assertIsNotNone(prepared.database().execute('SELECT story_id FROM prepared_posts WHERE story_id=?',(identity,)).fetchone())
+    def test_video_upload_and_selected_media_failure(self):
+        identity=self.add('A carefully sourced news item with substantial context and sufficient detail.')
+        self.ready(identity,media='https://cdn4.telesco.pe/movie.mp4')
+        with prepared.database() as c:
+            c.execute('UPDATE prepared_posts SET format="text_video" WHERE story_id=?',(identity,))
+        with patch('prepared.download_media',side_effect=TimeoutError),patch('automation.authorization'),patch('automation.send') as send:
+            result=prepared.publish_one(lambda:None,live=True,story_id=identity,require_media=True)
+        self.assertFalse(result['ok']);send.assert_not_called()
+        with patch('prepared.download_media',return_value=Path('/tmp/movie.mp4')) as download,patch('automation.authorization'),patch('automation.send',return_value='123'):
+            result=prepared.publish_one(lambda:None,live=True,story_id=identity,require_media=True)
+        self.assertTrue(result['video_uploaded']);self.assertFalse(result['image_uploaded'])
+        download.assert_called_once()
+        self.assertTrue(download.call_args.kwargs['video'])
     def test_publish_only_uses_saved_position_without_processing(self):
         first=self.add('The first carefully prepared news update has sufficient context for our readers.',1)
         second=self.add('The second carefully prepared news update has sufficient context for our readers.',2)
@@ -289,6 +347,23 @@ class ScheduleTests(unittest.TestCase):
 
 
 class AdditionalRegressions(FixtureCase):
+    def test_video_is_not_misclassified_as_its_photo_thumbnail(self):
+        page=b'''<div class="tgme_widget_message" data-post="ClashReport/123"><a class="tgme_widget_message_photo_wrap" style="background-image:url('https://cdn4.telesco.pe/poster.jpg')"></a><div class="tgme_widget_message_video_wrap"><video poster="https://cdn4.telesco.pe/poster.jpg"><source src="https://cdn4.telesco.pe/movie.mp4"></video></div><div class="tgme_widget_message_text">A substantial news report with a video and sufficient detail.</div><time datetime="2026-10-17T10:00:00Z"></time></div>'''
+        with patch('app.fetch',return_value=page):
+            row=newsroom.telegram('ClashReport',pages=1,message_id='123')[0]
+        self.assertEqual(row['attachment_kind'],'video')
+        self.assertEqual(row['attachment_url'],'https://cdn4.telesco.pe/movie.mp4')
+        self.assertIsNone(row['media_url'])
+    def test_video_metadata_replaces_legacy_image_reference(self):
+        body='A substantial news report with a video and sufficient detail for everyone.'
+        row=dict(title=body,url='https://t.me/ClashReport/123',source='Telegram @ClashReport',published=app.now(),media_url='https://cdn4.telesco.pe/poster.jpg')
+        newsroom.enqueue([row],1.8,[])
+        row.update(media_url=None,attachment_kind='video',attachment_url='https://cdn4.telesco.pe/movie.mp4')
+        newsroom.enqueue([row],1.8,[])
+        postcraft.prepare()
+        self.assertEqual(prepared.next_post()['format'],'text_video')
+        self.assertEqual(prepared.next_post()['media_url'],'https://cdn4.telesco.pe/movie.mp4')
+        self.assertEqual(newsroom.database().execute('SELECT COUNT(*) FROM story_media').fetchone()[0],0)
     def test_profile_cache_cannot_authorize_a_different_identity(self):
         with prepared.database() as c:
             c.execute('INSERT INTO entity_cache VALUES(?,?,?)',('replit',json.dumps({'valid':True,'names':['Replit']}),app.now()+3600))
@@ -321,6 +396,60 @@ class AdditionalRegressions(FixtureCase):
             result=prepared.publish_one(lambda:None,live=True)
         self.assertTrue(result['image_uploaded'])
         self.assertEqual(send.call_args.kwargs['image_path'],Path('/tmp/test-image.jpg'))
+
+class SelectedPostTests(FixtureCase):
+    url='https://t.me/ClashReport/101477'
+    def source_row(self,kind='none',attachment=None):
+        return dict(title="Canada's Carney:\nIf they're ready to move, we'll move. We're not playing clever here.\nLook, life's too short to play around other countries' political timing.\nWe're ready to do a deal if the U.S. is going to negotiate in good faith.",
+                    url=self.url,source='Telegram @ClashReport',published=app.now(),views=100,
+                    media_url=None,attachment_kind=kind,attachment_url=attachment)
+    def client(self):
+        client=Mock(spec=TweetKit)
+        client.user_profile.return_value=dict(ok=True,id='123',username='MarkJCarney',name='Mark Carney')
+        return client
+    def test_explicit_selection_sends_requested_quote_not_queue_head(self):
+        wrong=self.add('A completely different queued story that must not be sent during this test.')
+        self.ready(wrong,'Wrong queue head')
+        state=Mock()
+        with patch('newsroom.telegram',return_value=[self.source_row()]) as source,patch('automation.authorization',return_value=self.client()),patch('automation.send',return_value='999') as send:
+            report=selected_post.run(state,self.url,live=True)
+        self.assertEqual(report['publication']['post_id'],'999')
+        source.assert_called_once_with('ClashReport',pages=1,message_id='101477')
+        text=send.call_args.args[0]
+        self.assertTrue(text.startswith("@MarkJCarney:\n\nIf they're ready to move"))
+        self.assertIn('\n\nLook,',text)
+        self.assertEqual(prepared.next_post()['text'],'Wrong queue head')
+        self.assertEqual(prepared.database().execute('SELECT COUNT(*) FROM publications').fetchone()[0],1)
+    def test_preview_does_not_send_or_save_remote_state(self):
+        state=Mock()
+        with patch('newsroom.telegram',return_value=[self.source_row()]),patch('automation.authorization',return_value=self.client()),patch('automation.send') as send:
+            report=selected_post.run(state,self.url)
+        self.assertEqual(report['publication']['publishing'],'preview')
+        send.assert_not_called();state.checkpoint.assert_not_called()
+    def test_failed_identity_verification_does_not_send(self):
+        client=self.client();client.user_profile.side_effect=TimeoutError
+        with patch('newsroom.telegram',return_value=[self.source_row()]),patch('automation.authorization',return_value=client),patch('automation.send') as send:
+            report=selected_post.run(Mock(),self.url,live=True)
+        self.assertFalse(report['ok']);send.assert_not_called()
+    def test_missing_video_does_not_send_its_poster_or_text_only(self):
+        with patch('newsroom.telegram',return_value=[self.source_row('video')]),patch('automation.authorization',return_value=self.client()),patch('automation.send') as send:
+            report=selected_post.run(Mock(),self.url,live=True)
+        self.assertFalse(report['ok']);send.assert_not_called()
+        self.assertEqual(report['attachment_kind'],'video')
+    def test_already_posted_selection_cannot_be_repeated(self):
+        newsroom.enqueue([self.source_row()],1.8,[])
+        with newsroom.database() as c:
+            identity=c.execute('SELECT story_id FROM observations WHERE url=?',(self.url,)).fetchone()[0]
+            c.execute('INSERT INTO publications VALUES(?,?,?,?)',(identity,app.now(),'posted','123'))
+        with patch('newsroom.telegram') as source,patch('automation.send') as send:
+            report=selected_post.run(Mock(),self.url,live=True)
+        self.assertFalse(report['ok']);source.assert_not_called();send.assert_not_called()
+    def test_unconfigured_sources_rejected_before_network(self):
+        with patch('newsroom.telegram') as source:
+            with self.assertRaises(ValueError):
+                selected_post.run(Mock(),'https://t.me/NotConfigured/123',live=True)
+        source.assert_not_called()
+
 
 class DiscoveryTests(FixtureCase):
     def wikidata_fetch(self,url):

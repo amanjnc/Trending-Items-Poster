@@ -17,7 +17,7 @@ import prepared
 
 REGISTRY = app.ROOT/'entity_map.json'
 PROFILE_CACHE_VERSION = 2
-FORMAT_ORDER = {'text_image': 3, 'text': 2, 'text_image_link': 1, 'text_link': 0}
+FORMAT_ORDER = {'text_image': 3, 'text_video': 3, 'text': 2, 'text_image_link': 1, 'text_video_link': 1, 'text_link': 0}
 
 
 def normalized(value):
@@ -218,7 +218,10 @@ def weight(text):
 
 def compose(row,entities,context='',include_link=False):
     text=re.sub(r'https?://\S+','',row['body'])
-    text=re.sub(r'\s+',' ',text).strip()
+    # Telegram line breaks delimit the author's paragraphs. Keep them through
+    # mention replacement and length trimming; never split on abbreviations.
+    paragraphs=[re.sub(r'\s+',' ',part).strip() for part in re.split(r'\r?\n+',text)]
+    text='\n\n'.join(part for part in paragraphs if part)
     text=role_attribution(text,context,entities)
     text=replace_mentions(text,entities)
     # Tighten wording without strengthening uncertainty or inventing quotations.
@@ -227,16 +230,15 @@ def compose(row,entities,context='',include_link=False):
     text=re.sub(r'\bwants to take on the longevity-startup crowd\b','wants to challenge longevity startups',text,flags=re.I)
     budget=256 if include_link else 280
     if weight(text)>budget:
-        sentences=re.split(r'(?<=[.!?])(?<!\b[A-Z]\.)\s+',text)
         chosen=''
-        for sentence in sentences:
-            candidate=(chosen+' '+sentence).strip()
+        for boundary in re.finditer(r'(?<=[.!?])(?<!\b[A-Z]\.)\s+',text):
+            candidate=text[:boundary.start()].rstrip()
             if weight(candidate)>budget:
                 break
             chosen=candidate
         if not chosen:
-            for word in text.split():
-                candidate=(chosen+' '+word).strip()
+            for word in re.finditer(r'\S+',text):
+                candidate=text[:word.end()].rstrip()
                 if weight(candidate+'…')>budget:
                     break
                 chosen=candidate
@@ -281,13 +283,14 @@ def event_key(row):
     return ''
 
 
-def prepare(client=None):
+def prepare(client=None, selected_source=None):
     """Prepare and materialize the full ordered queue, only at collection time."""
     with newsroom.database() as c:
         rows=[dict(r) for r in c.execute('''SELECT s.*,n.body,n.priority,n.views,
             (SELECT COUNT(DISTINCT source) FROM observations o WHERE o.story_id=s.id) AS coverage
             FROM stories s JOIN news_items n ON n.story_id=s.id LEFT JOIN publications p ON p.story_id=s.id
-            WHERE p.story_id IS NULL AND s.status IN ('new','approved') AND s.published BETWEEN ? AND ?''',(app.now()-5*86400,app.now()))]
+            WHERE p.story_id IS NULL AND s.status IN ('new','approved') AND s.published BETWEEN ? AND ?
+            AND (? IS NULL OR s.url=?)''',(app.now()-5*86400,app.now(),selected_source,selected_source))]
     rows=[r for r in rows if not re.search(r'\b(?:coupon|promo code|discount|deal sale|limited.time offer)\b',r['body'],re.I)]
     enrich={}
     # Only a bounded number of external article reads; Telegram already supplies text.
@@ -306,6 +309,7 @@ def prepare(client=None):
     # New source media is collected into metadata by newsroom; legacy rows have none.
     with newsroom.database() as c:
         source_media={r['story_id']:r['media_url'] for r in c.execute('SELECT story_id,media_url FROM story_media')}
+        attachments={r['story_id']:dict(r) for r in c.execute('SELECT * FROM story_attachments')}
     candidates=[]
     for row in rows:
         expires,hours=lifetime(row)
@@ -313,6 +317,12 @@ def prepare(client=None):
             continue
         extra=enrich.get(row['id'],{'context':row['body'],'media_url':None})
         image=source_media.get(row['id']) or extra['media_url'] or media.get(row['id'])
+        attachment=attachments.get(row['id'])
+        video=bool(attachment and attachment['kind']=='video')
+        if video:
+            image=attachment['url']  # Never substitute a video poster as a photo.
+        elif attachment and attachment['kind']=='none':
+            image=None
         image=image if prepared.media_allowed(image) else None
         needs_link=bool(re.search(r'\b(?:download (?:it|the (?:app|report))|read the full (?:report|study)|apply (?:here|now))\b',row['body'],re.I))
         urls=[]
@@ -324,10 +334,10 @@ def prepare(client=None):
         internal=next((u for u in urls if urllib.parse.urlsplit(u).hostname in ('x.com','www.x.com','twitter.com','www.twitter.com')),None)
         selected_url=(urls[0] if urls else row['url']) if needs_link else internal
         external=bool(selected_url and urllib.parse.urlsplit(selected_url).hostname not in ('x.com','www.x.com','twitter.com','www.twitter.com'))
-        fmt=('text_image' if image else 'text')+('_link' if external else '')
+        fmt=(('text_video' if video else 'text_image') if image else 'text')+('_link' if external else '')
         text=compose(row|({'outbound_url':selected_url} if selected_url else {}),entities,extra['context'],bool(selected_url))
         age=max(0,(app.now()-row['published'])/3600)
-        format_bonus={'text_image':12,'text':8,'text_image_link':4,'text_link':0}[fmt]
+        format_bonus=FORMAT_ORDER[fmt]*4
         quality=min(10,len(row['body'].split())/5)
         base=60/(1+age/6)+25*(row['priority']-1)+min(15,math.log1p(row['views']))+min(15,max(0,row['coverage']-1)*5)+quality+format_bonus
         # Urgency cannot rescue a weak item and never dominates the score.
@@ -338,7 +348,7 @@ def prepare(client=None):
     # Interleave sources and separate quotes from the same event before saving order.
     ordered=[]
     with newsroom.database() as c:
-        previous=[dict(r) for r in c.execute('SELECT s.source,n.body,s.published FROM publications p JOIN stories s ON s.id=p.story_id LEFT JOIN news_items n ON n.story_id=s.id WHERE p.state="posted" ORDER BY p.attempted DESC LIMIT 5')]
+        previous=[dict(r) for r in c.execute('SELECT s.source,COALESCE(n.body,s.title) AS body,s.published FROM publications p JOIN stories s ON s.id=p.story_id LEFT JOIN news_items n ON n.story_id=s.id WHERE p.state="posted" ORDER BY p.attempted DESC LIMIT 5')]
     recent_sources=[r['source'] for r in reversed(previous[:2])]
     recent_events=[event_key(r) if r['body'] else '' for r in reversed(previous)]
     while candidates:
@@ -352,8 +362,15 @@ def prepare(client=None):
         recent_sources.append(selected['source'])
         recent_events.append(selected['event'])
     with prepared.database() as c:
-        c.execute('DELETE FROM prepared_posts')
+        if selected_source:
+            positions={r['story_id']:r['position'] for r in c.execute('SELECT story_id,position FROM prepared_posts')}
+            for row in ordered:
+                c.execute('DELETE FROM prepared_posts WHERE story_id=?',(row['story_id'],))
+        else:
+            positions={}
+            c.execute('DELETE FROM prepared_posts')
         for position,row in enumerate(ordered):
+            position=positions.get(row['story_id'],position) if selected_source else position
             c.execute('INSERT INTO prepared_posts VALUES(?,?,?,?,?,?,?,?,?,?)',(row['story_id'],row['text'],row['media_url'],row['source_url'],row['format'],row['rank'],row['expires_at'],position,json.dumps(row['reasons']),app.now()))
     return {'prepared':len(ordered),'verified_handles':['@'+e['handle'] for e in entities],
             'identity_resolution':newsroom.state_get('identity_resolution',{}),

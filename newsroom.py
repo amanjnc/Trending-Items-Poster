@@ -42,7 +42,8 @@ def database():
         reply_id TEXT PRIMARY KEY, post_id TEXT NOT NULL, text TEXT NOT NULL,
         state TEXT NOT NULL, attempted REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS reply_scan_posts (post_id TEXT PRIMARY KEY, checked REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS story_media (story_id TEXT PRIMARY KEY, media_url TEXT NOT NULL);''')
+        CREATE TABLE IF NOT EXISTS story_media (story_id TEXT PRIMARY KEY, media_url TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS story_attachments (story_id TEXT PRIMARY KEY, kind TEXT NOT NULL, url TEXT);''')
     return c
 
 
@@ -114,8 +115,8 @@ def is_duplicate(a, b):
     return overlap >= .82 or (overlap >= .65 and SequenceMatcher(None, a, b).ratio() >= .9)
 
 
-def telegram(channel, pages=3):
-    rows, before = [], None
+def telegram(channel, pages=3, message_id=None):
+    rows, before = [], str(int(message_id)+1) if message_id else None
     for _ in range(pages):
         url = 'https://t.me/s/' + channel + (('?before=' + before) if before else '')
         soup = BeautifulSoup(app.fetch(url), 'html.parser')
@@ -149,9 +150,14 @@ def telegram(channel, pages=3):
             views = int(float(vm[1]) * {'': 1, 'K': 1000, 'M': 1000000}[vm[2].upper()]) if vm else 0
             photo=msg.select_one('.tgme_widget_message_photo_wrap')
             image_match=re.search(r'''background-image:\s*url\(['"]?(.*?)['"]?\)''',photo.get('style','')) if photo else None
+            video=msg.select_one('video, .tgme_widget_message_video_wrap, .tgme_widget_message_video_player, .tgme_widget_message_video_thumb')
+            video_source=msg.select_one('video[src], video source[src]')
+            kind='video' if video else 'image' if image_match else 'none'
+            attachment=(video_source.get('src') if video_source else None) if video else (image_match[1] if image_match else None)
             rows.append(dict(title=body.get_text(), url='https://t.me/'+post,
                              source='Telegram @'+channel, published=date.timestamp(), views=views,
-                             media_url=html.unescape(image_match[1]) if image_match else None))
+                             media_url=html.unescape(image_match[1]) if image_match and not video else None,
+                             attachment_kind=kind,attachment_url=html.unescape(attachment) if attachment else None))
         if not ids or str(min(ids)) == before:
             break
         before = str(min(ids))
@@ -205,6 +211,14 @@ def verge(url):
     return rows
 
 
+def save_attachment(c,identity,row):
+    if 'attachment_kind' in row:
+        c.execute('INSERT OR REPLACE INTO story_attachments VALUES(?,?,?)',(identity,row['attachment_kind'],row.get('attachment_url')))
+        c.execute('DELETE FROM story_media WHERE story_id=?',(identity,))
+    if row.get('media_url'):
+        c.execute('INSERT OR REPLACE INTO story_media VALUES(?,?)',(identity,row['media_url']))
+
+
 def enqueue(rows, priority, handles):
     counts = dict(added=0, duplicates=0, rejected=0)
     for row in rows:
@@ -224,10 +238,11 @@ def enqueue(rows, priority, handles):
             known = c.execute('SELECT story_id FROM observations WHERE url=?', (url,)).fetchone()
             if known:
                 c.execute('UPDATE news_items SET views=MAX(views,?) WHERE story_id=?', (row.get('views',0),known[0]))
-                if row.get('media_url'):
+                if row.get('media_url') or 'attachment_kind' in row:
                     selected=c.execute('SELECT source FROM stories WHERE id=?',(known[0],)).fetchone()
-                    if selected and selected[0]==row['source']:
-                        c.execute('INSERT OR REPLACE INTO story_media VALUES(?,?)',(known[0],row['media_url']))
+                    posted=c.execute('SELECT 1 FROM publications WHERE story_id=?',(known[0],)).fetchone()
+                    if selected and selected[0]==row['source'] and not posted:
+                        save_attachment(c,known[0],row)
                 counts['duplicates'] += 1
                 continue
             recent = c.execute('''SELECT s.id,s.title,s.source,p.story_id AS posted,n.priority
@@ -242,8 +257,7 @@ def enqueue(rows, priority, handles):
                     c.execute('UPDATE stories SET title=?,url=?,source=?,published=? WHERE id=?', (body,url,row['source'],stamp,target))
                     c.execute('INSERT OR REPLACE INTO news_items VALUES(?,?,?,?,?)', (target,body,fingerprint,priority,row.get('views',0)))
                     c.execute('DELETE FROM story_media WHERE story_id=?',(target,))
-                    if row.get('media_url'):
-                        c.execute('INSERT INTO story_media VALUES(?,?)',(target,row['media_url']))
+                    save_attachment(c,target,row)
                 continue
             if c.execute('SELECT 1 FROM stories WHERE id=? OR url=?', (identity,url)).fetchone():
                 counts['duplicates'] += 1
@@ -252,8 +266,7 @@ def enqueue(rows, priority, handles):
                       (identity,body,url,row['source'],stamp,app.now(),0))
             c.execute('INSERT INTO news_items VALUES(?,?,?,?,?)', (identity,body,fingerprint,priority,row.get('views',0)))
             c.execute('INSERT INTO observations VALUES(?,?,?)', (url,identity,row['source']))
-            if row.get('media_url'):
-                c.execute('INSERT OR REPLACE INTO story_media VALUES(?,?)',(identity,row['media_url']))
+            save_attachment(c,identity,row)
             counts['added'] += 1
     return counts
 

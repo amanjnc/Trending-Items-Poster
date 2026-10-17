@@ -24,12 +24,12 @@ def database():
     return c
 
 
-def next_post():
+def next_post(story_id=None):
     with database() as c:
         row = c.execute('''SELECT q.* FROM prepared_posts q JOIN stories s ON s.id=q.story_id
             LEFT JOIN publications p ON p.story_id=q.story_id
             WHERE p.story_id IS NULL AND s.status IN ('new','approved') AND q.expires_at>?
-            ORDER BY q.position LIMIT 1''', (app.now(),)).fetchone()
+            AND (? IS NULL OR q.story_id=?) ORDER BY q.position LIMIT 1''', (app.now(),story_id,story_id)).fetchone()
     return dict(row) if row else None
 
 
@@ -45,7 +45,7 @@ def media_allowed(url):
         return False
 
 
-def download_media(url, directory):
+def download_media(url, directory, video=False):
     if not media_allowed(url):
         raise ValueError('Unsupported media host')
     class Redirect(urllib.request.HTTPRedirectHandler):
@@ -54,11 +54,16 @@ def download_media(url, directory):
                 raise ValueError('Unsupported media redirect')
             return super().redirect_request(req,fp,code,msg,headers,newurl)
     req = urllib.request.Request(url,headers={'User-Agent':'TrendingItemsPoster/1.0'})
-    with urllib.request.build_opener(Redirect).open(req,timeout=10) as r:
-        data = r.read(2_500_001)
-    if len(data)>2_500_000:
-        raise ValueError('Image too large')
-    if data.startswith(b'\xff\xd8\xff'):
+    limit=20_000_000 if video else 2_500_000
+    with urllib.request.build_opener(Redirect).open(req,timeout=30 if video else 10) as r:
+        data = r.read(limit+1)
+    if len(data)>limit:
+        raise ValueError('Media too large')
+    if video:
+        if len(data)<12 or data[4:8]!=b'ftyp':
+            raise ValueError('Unsupported video content')
+        suffix='.mp4'
+    elif data.startswith(b'\xff\xd8\xff'):
         suffix='.jpg'
     elif data.startswith(b'\x89PNG\r\n\x1a\n'):
         suffix='.png'
@@ -83,8 +88,23 @@ def gate(c,daily_limit,min_gap):
         return 'not due yet; exiting without sleeping'
 
 
-def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120):
-    row=next_post()
+def cleanup_posted():
+    """Discard posted queue payloads; retain text/IDs needed for deduplication and replies."""
+    with database() as c:
+        removed=c.execute('DELETE FROM prepared_posts WHERE story_id IN (SELECT story_id FROM publications WHERE state="posted")').rowcount
+        for table in ('story_media','story_attachments'):
+            if c.execute('SELECT 1 FROM sqlite_master WHERE type="table" AND name=?',(table,)).fetchone():
+                c.execute('DELETE FROM '+table+' WHERE story_id IN (SELECT story_id FROM publications WHERE state="posted")')
+        # The stories row already holds the text needed for near-duplicate checks;
+        # discard the duplicate editorial payload immediately after success.
+        if c.execute('SELECT 1 FROM sqlite_master WHERE type="table" AND name="news_items"').fetchone():
+            c.execute('DELETE FROM news_items WHERE story_id IN (SELECT story_id FROM publications WHERE state="posted")')
+        c.execute('UPDATE stories SET title=substr(title,1,280) WHERE length(title)>280 AND id IN (SELECT story_id FROM publications WHERE state="posted" AND attempted<?)',(app.now()-7*86400,))
+    return removed
+
+
+def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120, story_id=None, require_media=False):
+    row=next_post(story_id)
     if not row:
         return {'publishing':'queue empty or expired'}
     if not live:
@@ -96,11 +116,14 @@ def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120):
     automation.authorization()
     with tempfile.TemporaryDirectory() as d:
         image=None
+        video=row['format'].startswith('text_video')
         if row['media_url']:
             try:
-                image=download_media(row['media_url'],d)
+                image=download_media(row['media_url'],d,video=True) if video else download_media(row['media_url'],d)
             except Exception:
                 image=None
+        if require_media and not image:
+            return {'publishing':'media unavailable; selected post was not sent','ok':False}
         with database() as c:
             c.execute('BEGIN IMMEDIATE')
             blocked=gate(c,daily_limit,min_gap)
@@ -117,6 +140,7 @@ def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120):
             return {'publishing':'paused: posting outcome uncertain'}
         with database() as c:
             c.execute('UPDATE publications SET state="posted",post_id=? WHERE story_id=?',(post_id,row['story_id']))
+        cleanup_posted()
         checkpoint()
-    actual_format=('text_image' if image else 'text')+('_link' if row['format'].endswith('_link') else '')
-    return {'publishing':'posted','post_id':post_id,'format':actual_format,'image_uploaded':bool(image),'source_url':row['source_url']}
+    actual_format=(('text_video' if video else 'text_image') if image else 'text')+('_link' if row['format'].endswith('_link') else '')
+    return {'publishing':'posted','post_id':post_id,'format':actual_format,'image_uploaded':bool(image) and not video,'video_uploaded':bool(image) and video,'source_url':row['source_url'],'queue_payload_removed':True}

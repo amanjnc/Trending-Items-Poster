@@ -26,6 +26,7 @@ def run(state,mode='collect',live=False,auto_like=False):
         import newsroom
         import postcraft
         source_report=newsroom.collect()
+        prepared.cleanup_posted()
         client=None
         if os.environ.get('TWEETKIT_COOKIE'):
             try:
