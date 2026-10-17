@@ -1,0 +1,38 @@
+name: Automatic news scheduler
+on:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Publish ONE item (off = preview)'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: x-autopost-history
+  cancel-in-progress: false
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/python-runtime
+      - name: Collect when due or publish one prepared item, then exit
+        env:
+          TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
+          TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
+          LIVE: ${{ inputs.live }}
+        shell: bash
+        run: |
+          args=(--mode auto)
+          if [[ "$LIVE" == "true" ]]; then args+=(--live); fi
+          .local/runtime/bin/python queue_worker.py "${args[@]}"
+      - name: Save scheduler result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheduler-${{ github.run_id }}-${{ github.run_attempt }}
+          path: posting-report.json
+          if-no-files-found: ignore
+          retention-days: 7

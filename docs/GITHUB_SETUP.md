@@ -32,6 +32,22 @@ Every publication job sends at most one post. There are no deliberate sleep peri
 
 Disable scheduled operation with `NEWS_QUEUE_ENABLED=false`; cancel any currently running job too. Manual live dispatch still works with scheduling disabled.
 
+## One external cron job
+
+Use a fine-grained GitHub token restricted to this repository with **Actions: read and write**. Keep it in cron-job.org's Authorization header, never in the URL or this repository. Create one disabled job initially:
+
+- Schedule: `*/5 * * * *`
+- Method: `POST`
+- URL: `https://api.github.com/repos/amanjnc/Trending-Items-Poster/actions/workflows/auto.yml/dispatches`
+- Headers: `Authorization: Bearer YOUR_TOKEN`, `Accept: application/vnd.github+json`, `Content-Type: application/json`, `X-GitHub-Api-Version: 2022-11-28`
+- JSON body: `{"ref":"main","inputs":{"live":true}}`
+
+Set the GitHub repository variable `NEWS_QUEUE_ENABLED=false` and let any active old runs finish before enabling this external job. Do not enable a second external collection/publishing job. Disabling this variable also disables the old hourly reply-like schedule; reply checks remain separately available by manual dispatch and can be configured separately later.
+
+The first trigger in each two-hour UTC period collects, cleans, resolves mentions, ranks and publishes one item. Other triggers publish one saved item only, without importing collectors or editors. If a period's first trigger is delayed, the next trigger collects. A successful manual collection also updates the marker. The decision and marker are protected by the shared workflow concurrency group and durable state saves. If every source fails, collection retries after thirty minutes while intermediate ticks can use the existing queue. Failed/uncertain public sends still pause; no automatic repost occurs.
+
+Normal daily work remains 12 collection ticks plus 276 publishing-only ticks. An HTTP 204 response means GitHub accepted dispatch, not that publishing succeeded; inspect Actions and the saved report. Jobs shut down between ticks, and GitHub runner minutes still apply. Token expiration, disabled cron jobs, GitHub delays and outages can interrupt scheduling. This workflow has no built-in cron trigger and is only externally/manually dispatched.
+
 ## Account mentions and writing
 
 To test one particular source item, open **Actions → Publish a selected story → Run workflow** on `main`. Supply its exact configured Telegram message URL. Leave publishing off for a preview/media inspection, or check publishing to send that item. The default URL is `https://t.me/ClashReport/101477`, the Carney quote beginning “If they're ready to move, we'll move.” The workflow refreshes this source message and verifies its identity mentions before selecting it. It preserves other queued drafts and never bypasses previous-post reservations. Its report includes actual source attachment kind and download availability. Unresolved identity checks, expired items, or unavailable selected media stop the job without sending another item.

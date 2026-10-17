@@ -15,6 +15,8 @@ A prepared news queue hosted on GitHub Actions. Collection does the expensive wo
 
 ## Prepared content
 
+For one external cron job, trigger **Automatic news scheduler** (`auto.yml`) every five minutes. It collects/prepares and publishes one item on the first trigger in each two-hour UTC period, then publishes only one saved item on subsequent triggers. The persisted marker tolerates delayed or duplicate collection triggers. Disable the built-in schedules with `NEWS_QUEUE_ENABLED=false` before enabling external dispatches. Posting guards and history reservations remain active. This changes scheduler configuration, not GitHub runner billing. Reply likes remain a separate workflow.
+
 Account mentions use curated mappings, source-linked identities, and bounded Wikidata account discovery, followed by cached X profile identity/existence checks. Unknown or ambiguous identities stay as names. See [entity_map.json](entity_map.json) for initial mappings. Speaker replacements require the source to explicitly identify the speaker; a company's current CEO is not automatically assumed to have made an unattributed statement.
 
 Posts preserve source paragraph breaks with one blank line between paragraphs, including when excerpts must be shortened. No fabricated claims, quotes, statistics, or engagement bait are added. This is rule-based editing, not a paid AI writer, independent fact checker, or prediction of virality.

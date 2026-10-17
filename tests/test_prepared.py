@@ -324,6 +324,47 @@ class FastPublisherTests(FixtureCase):
             prepared.publish_one(lambda:None,live=True)
         self.assertEqual(send.call_count,1)
 
+class AutomaticSchedulerTests(FixtureCase):
+    def test_one_day_has_twelve_collections_and_276_publishing_ticks(self):
+        start=1792195200//7200*7200
+        modes=[]
+        for tick in range(288):
+            now=start+tick*300
+            with patch('app.now',return_value=now):
+                mode,bucket=queue_worker.automatic_mode()
+                modes.append(mode)
+                if mode=='collect':
+                    newsroom.state_set('automatic_collection',dict(bucket=bucket,attempted=now,ok=True))
+        self.assertEqual(modes.count('collect'),12)
+        self.assertEqual(modes.count('publish'),276)
+    def test_late_first_tick_collects_then_later_ticks_only_publish(self):
+        now=1792195200//7200*7200+420
+        with patch('app.now',return_value=now):
+            self.assertEqual(queue_worker.automatic_mode()[0],'collect')
+            newsroom.state_set('automatic_collection',dict(bucket=now//7200,attempted=now,ok=True))
+        with patch('app.now',return_value=now+300),patch('newsroom.collect') as collect,patch('postcraft.prepare') as prepare,patch('time.sleep') as sleep,patch('prepared.publish_one',return_value={'publishing':'preview'}) as publish:
+            result=queue_worker.run(Mock(),mode='auto')
+        self.assertEqual(result['automatic_mode'],'publish')
+        collect.assert_not_called();prepare.assert_not_called();sleep.assert_not_called();publish.assert_called_once()
+    def test_source_outage_uses_bounded_retry_backoff(self):
+        now=1792195200//7200*7200+60
+        newsroom.state_set('automatic_collection',dict(bucket=now//7200,attempted=now,ok=False))
+        with patch('app.now',return_value=now+300):
+            self.assertEqual(queue_worker.automatic_mode()[0],'publish')
+        with patch('app.now',return_value=now+1800):
+            self.assertEqual(queue_worker.automatic_mode()[0],'collect')
+    def test_successful_collection_marker_is_saved_before_posting(self):
+        state=Mock()
+        def checkpoint():
+            self.assertTrue(newsroom.state_get('automatic_collection')['ok'])
+        state.checkpoint.side_effect=checkpoint
+        with patch('newsroom.collect',return_value={'source':{'added':1}}),patch('postcraft.prepare',return_value={'prepared':1}),patch('prepared.publish_one',return_value={'publishing':'preview'}):
+            result=queue_worker.run(state,mode='auto')
+        self.assertEqual(result['automatic_mode'],'collect')
+        self.assertEqual(queue_worker.automatic_mode()[0],'publish')
+        state.checkpoint.assert_called_once()
+
+
 class ScheduleTests(unittest.TestCase):
     def test_collection_and_publish_slots_partition_five_minute_day(self):
         root=app.ROOT/'.github/workflows'

@@ -11,8 +11,24 @@ from actions_runner import GitState, StateError
 import prepared
 
 
+def automatic_mode():
+    """A small persisted-state read; publishing ticks never import collectors."""
+    bucket=int(app.now()//7200)
+    with prepared.database() as c:
+        exists=c.execute('SELECT 1 FROM sqlite_master WHERE type="table" AND name="worker_state"').fetchone()
+        row=c.execute('SELECT value FROM worker_state WHERE key="automatic_collection"').fetchone() if exists else None
+    previous=json.loads(row[0]) if row else {}
+    if previous.get('bucket')==bucket:
+        # A source outage retries at most twice an hour instead of on every tick.
+        if previous.get('ok') or app.now()-previous.get('attempted',0)<1800:
+            return 'publish',bucket
+    return 'collect',bucket
+
+
 def run(state,mode='collect',live=False,auto_like=False):
     start=time.monotonic()
+    automatic=mode=='auto'
+    mode,bucket=automatic_mode() if automatic else (mode,int(app.now()//7200))
     if mode=='publish':
         # No collector/editorial imports, entity resolution, tests, or ranking here.
         report=prepared.publish_one(state.checkpoint,live=live)
@@ -34,12 +50,19 @@ def run(state,mode='collect',live=False,auto_like=False):
             except ValueError:
                 pass  # Names remain unchanged if lookup is unavailable.
         preparation=postcraft.prepare(client=client)
+        collection_ok=bool(source_report) and any('error' not in r for r in source_report.values())
+        newsroom.state_set('automatic_collection',{'bucket':bucket,'attempted':app.now(),'ok':collection_ok})
         state.checkpoint()
         report={'sources':source_report,'preparation':preparation}
         if source_report and all('error' in r for r in source_report.values()) and not preparation['prepared']:
             report['ok']=False
         if live:
             report['publication']=prepared.publish_one(state.checkpoint,live=True)
+        if automatic and not collection_ok:
+            report['ok']=False
+    if automatic:
+        report['automatic_mode']=mode
+        report['collection_period_start_utc']=app.dt.datetime.fromtimestamp(bucket*7200,app.UTC).isoformat()
     report['task_seconds']=round(time.monotonic()-start,3)
     report.setdefault('ok',not str(report.get('publishing','')).startswith('paused'))
     if str(report.get('publication',{}).get('publishing','')).startswith('paused'):
@@ -50,7 +73,7 @@ def run(state,mode='collect',live=False,auto_like=False):
 def main():
     started=time.monotonic()
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--mode',choices=['collect','publish','replies'],default='collect')
+    p.add_argument('--mode',choices=['auto','collect','publish','replies'],default='collect')
     p.add_argument('--live',action='store_true')
     p.add_argument('--auto-like',action='store_true')
     args=p.parse_args()
