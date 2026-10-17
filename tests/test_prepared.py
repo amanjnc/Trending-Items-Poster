@@ -39,6 +39,23 @@ class FixtureCase(unittest.TestCase):
             c.execute('INSERT OR REPLACE INTO prepared_posts VALUES(?,?,?,?,?,?,?,?,?,?)',(identity,text,media,'https://t.me/ClashReport/'+identity,'text_image' if media else 'text',rank,expires or app.now()+3600,position,'{}',app.now()))
 
 class EntityTests(FixtureCase):
+    def test_full_and_short_pezeshkian_names_use_confirmed_persian_profile(self):
+        client=Mock(spec=TweetKit)
+        client.user_profile.return_value=dict(ok=True,id='123',username='drpezeshkian',name='مسعود پزشکیان')
+        texts=['Iranian President Masoud Pezeshkian:\nMuslims should unite.',
+               'Iranian President Pezeshkian on the Mecca Alliance:\nThis is a step forward.']
+        entities=postcraft.resolve_entities(texts,client=client)
+        self.assertEqual(len(entities),1)
+        for text in texts:
+            result=postcraft.compose(dict(body=text,url='https://example.com'),entities)
+            self.assertIn('@drpezeshkian',result)
+            self.assertNotIn('Pezeshkian',result)
+        self.assertEqual(postcraft.replace_mentions('Pezeshkian won a school prize.',entities),'Pezeshkian won a school prize.')
+    def test_institution_names_are_confirmed_without_tagging_common_pronouns(self):
+        client=Mock(spec=TweetKit)
+        client.user_profile.return_value=dict(ok=True,id='123',username='WHO',name='World Health Organization (WHO)')
+        entities=postcraft.resolve_entities(['World Health Organization announced new guidance.'],client=client)
+        self.assertEqual(postcraft.replace_mentions('World Health Organization says who can apply.',entities),'@WHO says who can apply.')
     def test_canadas_carney_is_tagged_with_confirmed_account(self):
         body="Canada's Carney: We've got to take care of ourselves, and we always take care of each other."
         entities=postcraft.resolve_entities([body],client=self.profile_client())
@@ -325,6 +342,10 @@ class FastPublisherTests(FixtureCase):
         self.assertEqual(send.call_count,1)
 
 class AutomaticSchedulerTests(FixtureCase):
+    def test_old_queue_version_forces_refresh_before_more_publishing(self):
+        now=app.now()
+        newsroom.state_set('automatic_collection',dict(bucket=int(now//7200),attempted=now,ok=True,preparation_version=1))
+        self.assertEqual(queue_worker.automatic_mode()[0],'collect')
     def test_one_day_has_twelve_collections_and_276_publishing_ticks(self):
         start=1792195200//7200*7200
         modes=[]
@@ -334,21 +355,21 @@ class AutomaticSchedulerTests(FixtureCase):
                 mode,bucket=queue_worker.automatic_mode()
                 modes.append(mode)
                 if mode=='collect':
-                    newsroom.state_set('automatic_collection',dict(bucket=bucket,attempted=now,ok=True))
+                    newsroom.state_set('automatic_collection',dict(bucket=bucket,attempted=now,ok=True,preparation_version=queue_worker.PREPARATION_VERSION))
         self.assertEqual(modes.count('collect'),12)
         self.assertEqual(modes.count('publish'),276)
     def test_late_first_tick_collects_then_later_ticks_only_publish(self):
         now=1792195200//7200*7200+420
         with patch('app.now',return_value=now):
             self.assertEqual(queue_worker.automatic_mode()[0],'collect')
-            newsroom.state_set('automatic_collection',dict(bucket=now//7200,attempted=now,ok=True))
+            newsroom.state_set('automatic_collection',dict(bucket=now//7200,attempted=now,ok=True,preparation_version=queue_worker.PREPARATION_VERSION))
         with patch('app.now',return_value=now+300),patch('newsroom.collect') as collect,patch('postcraft.prepare') as prepare,patch('time.sleep') as sleep,patch('prepared.publish_one',return_value={'publishing':'preview'}) as publish:
             result=queue_worker.run(Mock(),mode='auto')
         self.assertEqual(result['automatic_mode'],'publish')
         collect.assert_not_called();prepare.assert_not_called();sleep.assert_not_called();publish.assert_called_once()
     def test_source_outage_uses_bounded_retry_backoff(self):
         now=1792195200//7200*7200+60
-        newsroom.state_set('automatic_collection',dict(bucket=now//7200,attempted=now,ok=False))
+        newsroom.state_set('automatic_collection',dict(bucket=now//7200,attempted=now,ok=False,preparation_version=queue_worker.PREPARATION_VERSION))
         with patch('app.now',return_value=now+300):
             self.assertEqual(queue_worker.automatic_mode()[0],'publish')
         with patch('app.now',return_value=now+1800):
@@ -499,6 +520,28 @@ class SelectedPostTests(FixtureCase):
 
 
 class DiscoveryTests(FixtureCase):
+    def test_role_extraction_keeps_complete_names_and_prioritises_people(self):
+        names=postcraft.entity_candidates(['Western Ukraine has new developments.',
+            'Slovak Prime Minister Robert Fico says a decision is needed.',
+            'ECB President Christine Lagarde announced new guidance.'])
+        self.assertEqual(names[:2],['Robert Fico','Christine Lagarde'])
+        self.assertNotIn('Slovak Prime Minister Robert',names)
+        self.assertNotIn('ECB President Christine Lagarde',names)
+    def test_companies_inside_sentences_and_full_institutions_are_candidates(self):
+        names=postcraft.entity_candidates(['The startup ByteDance announced an update.',
+                                          'European Central Bank will publish new guidance.'])
+        self.assertIn('ByteDance',names)
+        self.assertIn('European Central Bank',names)
+    def test_structured_native_language_label_can_validate_display_name(self):
+        def fetch(url):
+            if 'wbsearchentities' in url:
+                return json.dumps({'search':[dict(id='Q123',label='Ada Example')]}).encode()
+            return json.dumps({'entities':{'Q123':{'labels':{'en':{'value':'Ada Example'},'fa':{'value':'نام نمونه'}},'claims':{'P2002':[{'mainsnak':{'datavalue':{'value':'AdaExample'}}}]}}}}).encode()
+        with patch('app.fetch',side_effect=fetch):
+            found=postcraft.discover_entities(['President Ada Example said the plan was ready.'])
+        client=Mock(spec=TweetKit)
+        client.user_profile.return_value=dict(ok=True,id='123',username='AdaExample',name='نام نمونه')
+        self.assertEqual(postcraft.resolve_entities(['Ada Example'],found,client)[0]['handle'],'AdaExample')
     def wikidata_fetch(self,url):
         if 'wbsearchentities' in url:
             return json.dumps({'search':[{'id':'Q123','label':'Ada Example'}]}).encode()

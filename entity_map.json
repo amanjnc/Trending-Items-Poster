@@ -1,6 +1,29 @@
 {
   "entities": [
     {
+      "names": ["Masoud Pezeshkian", "Massoud Pezeshkian"],
+      "contextual_names": [{"name": "Pezeshkian", "context": "\\b(?:Iran|Iranian|President|Tehran)\\b"}],
+      "handle": "drpezeshkian",
+      "profile_names": ["Masoud Pezeshkian", "Dr. Masoud Pezeshkian", "مسعود پزشکیان", "دکتر مسعود پزشکیان"],
+      "reference": "https://x.com/drpezeshkian"
+    },
+    {
+      "names": ["NATO", "North Atlantic Treaty Organization"],
+      "handle": "NATO", "profile_names": ["NATO"], "reference": "https://www.nato.int/"
+    },
+    {
+      "names": ["European Commission"],
+      "handle": "EU_Commission", "profile_names": ["European Commission"], "reference": "https://commission.europa.eu/"
+    },
+    {
+      "names": ["United Nations"],
+      "handle": "UN", "profile_names": ["United Nations"], "reference": "https://www.un.org/"
+    },
+    {
+      "names": ["World Health Organization"],
+      "handle": "WHO", "profile_names": ["World Health Organization (WHO)", "World Health Organization"], "reference": "https://www.who.int/"
+    },
+    {
       "names": ["Mark Carney", "Canada's Carney", "Canada’s Carney"],
       "contextual_names": [{"name": "Carney", "context": "\\b(?:Canada|Canadian|Ottawa)\\b"}],
       "handle": "MarkJCarney",

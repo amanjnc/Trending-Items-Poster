@@ -25,7 +25,8 @@ def normalized(value):
 
 
 def contains(text,name):
-    return bool(re.search(r'(?<![\w@])'+re.escape(name)+r'(?!\w)',text,re.I))
+    flags=0 if name.isupper() and len(name)<=5 else re.I
+    return bool(re.search(r'(?<![\w@])'+re.escape(name)+r'(?!\w)',text,flags))
 
 
 def mention_names(text,entity):
@@ -86,16 +87,30 @@ def resolve_entities(texts, discovered=(), client=None, budget=45):
     return list(result.values())
 
 
-def discover_entities(texts,limit=8):
-    """Find unambiguous structured X-account claims, then require profile validation."""
-    known=json.loads(REGISTRY.read_text())['entities']
-    known_names={normalized(name) for e in known for name in e['names']}
-    names=[]
+def entity_candidates(texts):
+    """Extract complete names after titles before spending lookups on headlines."""
+    people=[]
+    other=[]
+    token=r"[A-ZÀ-Ž][A-Za-zÀ-ž’'-]+"
+    roles=r'(?:Prime Minister|Foreign Minister|Defen[cs]e Secretary|Crown Prince|chief executive|President|Chancellor|Senator|Governor|CEO|CTO|CFO|Founder|Chairman|King|Dr\.?|Mr\.?|Ms\.?)'
     for text in texts:
-        names += re.findall(r'\b[A-Z][a-zA-Z]+(?: [A-Z][a-zA-Z]+){1,3}\b',text)
-        names += re.findall(r'^([A-Z][A-Za-z0-9&.-]{2,}) (?=is |has |wants |will |announced |says |said |launches |leaves |ends |plans |joins |stops |raises )',text)
-    names=[re.sub(r'^(?:CEO|CTO|CFO|President|Founder|Chairman|Dr|Mr|Ms) ', '', n) for n in names]
-    names=list(dict.fromkeys(n for n in names if normalized(n) not in known_names and not n.startswith(('The ','A ','An '))))
+        people.extend(re.findall(r'\b'+roles+r'\s+('+token+r'(?:\s+(?:'+token+r'|bin|al|el|van|von|de)){0,5})',text))
+        other.extend(re.findall(r'\b'+token+r'(?: (?:of |the |and |for )?'+token+r'){1,7}\b',text))
+        other.extend(re.findall(r'\b([A-Z][A-Za-z0-9&.-]{2,}) (?=is |has |wants |will |announced |says |said |launches |leaves |ends |plans |joins |stops |raises )',text))
+    names=list(dict.fromkeys(n.strip() for n in people+other))
+    known=json.loads(REGISTRY.read_text())['entities']
+    known_names={normalized(name) for e in known for name in e['names']+[a['name'] for a in e.get('contextual_names',[])]}
+    # A recognised title/name should not also generate a failed lookup for the
+    # surrounding nationality and job title.
+    names=[n for n in names if normalized(n) not in known_names
+            and not any(contains(n,p) and n!=p for p in people)
+            and not n.startswith(('The ','A ','An ','Read More','On Wednesday','Western Ukraine'))]
+    return [n for n in names if not any(n!=full and contains(full,n) for full in names)]
+
+
+def discover_entities(texts,limit=32):
+    """Find unambiguous structured X-account claims, then require profile validation."""
+    names=entity_candidates(texts)
     resolved=[]
     missing=[]
     with prepared.database() as c:
@@ -117,7 +132,7 @@ def discover_entities(texts,limit=8):
         identity=exact[0].get('id','')
         if not re.fullmatch(r'Q\d+',identity):
             return None
-        query=urllib.parse.urlencode(dict(action='wbgetentities',ids=identity,props='labels|aliases|claims',languages='en',format='json'))
+        query=urllib.parse.urlencode(dict(action='wbgetentities',ids=identity,props='labels|aliases|claims',languages='en|fa|ar|uk|ru|zh|ja|hi|fr',format='json'))
         item=json.loads(app.fetch(api+query)).get('entities',{}).get(identity,{})
         claims=[r for r in item.get('claims',{}).get('P2002',[]) if r.get('rank')!='deprecated' and not r.get('qualifiers',{}).get('P582')]
         preferred=[r for r in claims if r.get('rank')=='preferred']
@@ -126,8 +141,9 @@ def discover_entities(texts,limit=8):
         if len(handles)!=1:
             return None
         label=item.get('labels',{}).get('en',{}).get('value',name)
-        aliases=[v.get('value','') for v in item.get('aliases',{}).get('en',[])]
-        return dict(names=list(dict.fromkeys([name,label])),profile_names=list(dict.fromkeys([name,label]+aliases)),handle=next(iter(handles)),reference='https://www.wikidata.org/wiki/'+identity)
+        aliases=[v.get('value','') for values in item.get('aliases',{}).values() for v in values]
+        labels=[v.get('value','') for v in item.get('labels',{}).values()]
+        return dict(names=list(dict.fromkeys([name,label])),profile_names=list(dict.fromkeys([name,label]+aliases+labels)),handle=next(iter(handles)),reference='https://www.wikidata.org/wiki/'+identity)
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         jobs=[(n,pool.submit(lookup,n)) for n in missing]
         for name,future in jobs:
@@ -141,6 +157,8 @@ def discover_entities(texts,limit=8):
                 c.execute('INSERT OR REPLACE INTO identity_discovery VALUES(?,?,?)',(normalized(name),json.dumps(value),app.now()+ttl))
             if value:
                 resolved.append(value)
+    newsroom.state_set('identity_discovery_report',{'candidates':names,'attempted':missing,
+                       'resolved_names':[e['names'][0] for e in resolved],'lookup_limit':limit})
     return resolved
 
 
@@ -181,8 +199,11 @@ def replace_mentions(text,entities):
     if not pairs:
         return text
     mapping={name.casefold():handle for name,handle in pairs}
+    acronyms={name.casefold():name for name,_ in pairs if name.isupper() and len(name)<=5}
     pattern=r'(?<![\w@])(?:'+'|'.join(re.escape(n) for n,_ in pairs)+r')(?!\w)'
     def substitute(match):
+        if match[0].casefold() in acronyms and match[0]!=acronyms[match[0].casefold()]:
+            return match[0]
         if match[0].casefold()=='meta' and text[match.end():].lower().startswith('-analysis'):
             return match[0]
         return mapping[match[0].casefold()]
@@ -302,7 +323,8 @@ def prepare(client=None, selected_source=None):
     all_text=[r['body'] for r in rows]+[e['context'] for e in enrich.values()]
     discovered=[e for v in enrich.values() for e in v['entities']]
     if client is not None:
-        discovered += discover_entities([r['body'] for r in sorted(rows,key=lambda r:r['published'],reverse=True)]+[e['context'] for e in enrich.values()])
+        discovery_rows=sorted(rows,key=lambda r:60/(1+max(0,(app.now()-r['published'])/3600)/6)+25*(r['priority']-1),reverse=True)
+        discovered += discover_entities([r['body'] for r in discovery_rows]+[e['context'] for e in enrich.values()])
     entities=resolve_entities(all_text,discovered,client)
     with prepared.database() as c:
         media={r['story_id']:r['media_url'] for r in c.execute('SELECT story_id,media_url FROM prepared_posts')}
@@ -374,5 +396,6 @@ def prepare(client=None, selected_source=None):
             c.execute('INSERT INTO prepared_posts VALUES(?,?,?,?,?,?,?,?,?,?)',(row['story_id'],row['text'],row['media_url'],row['source_url'],row['format'],row['rank'],row['expires_at'],position,json.dumps(row['reasons']),app.now()))
     return {'prepared':len(ordered),'verified_handles':['@'+e['handle'] for e in entities],
             'identity_resolution':newsroom.state_get('identity_resolution',{}),
+            'identity_discovery':newsroom.state_get('identity_discovery_report',{}),
             'top5':[dict(text=r['text'],format=r['format'],rank=r['rank'],source_url=r['source_url'],reasons=r['reasons']) for r in ordered[:5]],
             'bottom5':[dict(text=r['text'],format=r['format'],rank=r['rank'],source_url=r['source_url'],reasons=r['reasons']) for r in ordered[-5:]]}

@@ -10,6 +10,7 @@ import automation
 from actions_runner import GitState, StateError
 import prepared
 
+PREPARATION_VERSION=2
 
 def automatic_mode():
     """A small persisted-state read; publishing ticks never import collectors."""
@@ -18,7 +19,7 @@ def automatic_mode():
         exists=c.execute('SELECT 1 FROM sqlite_master WHERE type="table" AND name="worker_state"').fetchone()
         row=c.execute('SELECT value FROM worker_state WHERE key="automatic_collection"').fetchone() if exists else None
     previous=json.loads(row[0]) if row else {}
-    if previous.get('bucket')==bucket:
+    if previous.get('bucket')==bucket and previous.get('preparation_version')==PREPARATION_VERSION:
         # A source outage retries at most twice an hour instead of on every tick.
         if previous.get('ok') or app.now()-previous.get('attempted',0)<1800:
             return 'publish',bucket
@@ -51,7 +52,7 @@ def run(state,mode='collect',live=False,auto_like=False):
                 pass  # Names remain unchanged if lookup is unavailable.
         preparation=postcraft.prepare(client=client)
         collection_ok=bool(source_report) and any('error' not in r for r in source_report.values())
-        newsroom.state_set('automatic_collection',{'bucket':bucket,'attempted':app.now(),'ok':collection_ok})
+        newsroom.state_set('automatic_collection',{'bucket':bucket,'attempted':app.now(),'ok':collection_ok,'preparation_version':PREPARATION_VERSION})
         state.checkpoint()
         report={'sources':source_report,'preparation':preparation}
         if source_report and all('error' in r for r in source_report.values()) and not preparation['prepared']:
