@@ -161,7 +161,7 @@ def telegram(channel, pages=3, message_id=None):
         if not ids or str(min(ids)) == before:
             break
         before = str(min(ids))
-        if rows and max(r['published'] for r in rows[-len(messages):]) < app.now()-86400:
+        if rows and max(r['published'] for r in rows[-len(messages):]) < app.now()-7200:
             break
     return rows
 
@@ -219,12 +219,13 @@ def save_attachment(c,identity,row):
         c.execute('INSERT OR REPLACE INTO story_media VALUES(?,?)',(identity,row['media_url']))
 
 
-def enqueue(rows, priority, handles):
+def enqueue(rows, priority, handles, window_end=None):
+    window_end=app.now() if window_end is None else window_end
     counts = dict(added=0, duplicates=0, rejected=0)
     for row in rows:
         body = clean_text(row['title'], handles)
         stamp = row['published']
-        if len(signature(body).split()) < 7 or len(body) < 45 or stamp <= app.now()-86400 or stamp > app.now()+60:
+        if len(signature(body).split()) < 7 or len(body) < 45 or not window_end-7200<stamp<=window_end:
             counts['rejected'] += 1
             continue
         try:
@@ -273,6 +274,7 @@ def enqueue(rows, priority, handles):
 
 def collect(config_value=None):
     cfg = config_value or config()
+    window_end=app.now()
     handles = [s['channel'] for s in cfg['telegram']]
     report = {}
     jobs = [('Telegram @'+s['channel'], lambda s=s: telegram(s['channel'], cfg['telegram_pages']), s['priority']) for s in cfg['telegram']]
@@ -283,7 +285,8 @@ def collect(config_value=None):
     for name, future, priority in sorted(submitted, key=lambda j:j[2], reverse=True):
         try:
             rows = future.result()
-            report[name] = dict(received=len(rows), **enqueue(rows, priority, handles))
+            report[name] = dict(received=len(rows),window_start=window_end-7200,window_end=window_end,
+                                **enqueue(rows, priority, handles,window_end=window_end))
         except Exception as e:
             report[name] = {'error': type(e).__name__, 'detail': 'Source unavailable or response format changed'}
     state_set('last_collection', app.now())

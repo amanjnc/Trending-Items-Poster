@@ -261,6 +261,20 @@ class PreparationTests(FixtureCase):
         self.assertLessEqual(postcraft.weight(linked.rsplit('\n',1)[0])+24,280)
 
 class FastPublisherTests(FixtureCase):
+    def test_explicit_reset_clears_pending_payloads_but_preserves_posting_history(self):
+        for n in range(1,4):
+            identity=self.add('A detailed news update explains recent developments with important context for readers.',n,
+                              media='https://cdn4.telesco.pe/image.jpg')
+            self.ready(identity)
+        with prepared.database() as c:
+            c.execute('INSERT INTO publications VALUES(?,?,?,?)',('2',app.now(),'posted','123'))
+            c.execute('INSERT INTO publications VALUES(?,?,?,NULL)',('3',app.now(),'uncertain'))
+        self.assertEqual(prepared.clear_pending(),1)
+        with newsroom.database() as c:
+            for table,column in (('prepared_posts','story_id'),('news_items','story_id'),('story_media','story_id'),('observations','story_id'),('stories','id')):
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM '+table+' WHERE '+column+'="1"').fetchone()[0],0)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM publications').fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM stories').fetchone()[0],2)
     def test_one_day_old_payload_is_deleted_even_when_legacy_expiry_allows_five_days(self):
         identity=self.add('A detailed old research guide with sufficient context and information for readers.',age=86400,
                           media='https://cdn4.telesco.pe/old.jpg')

@@ -10,7 +10,7 @@ import automation
 from actions_runner import GitState, StateError
 import prepared
 
-PREPARATION_VERSION=3
+PREPARATION_VERSION=4
 
 def automatic_mode():
     """A small persisted-state read; publishing ticks never import collectors."""

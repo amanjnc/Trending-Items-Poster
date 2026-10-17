@@ -105,6 +105,19 @@ def cleanup_posted():
     return removed
 
 
+def clear_pending():
+    """Explicit queue reset: never touch a published or reserved story."""
+    with database() as c:
+        ids=[r[0] for r in c.execute('''SELECT s.id FROM stories s LEFT JOIN publications p ON p.story_id=s.id
+            WHERE p.story_id IS NULL AND s.status IN ('new','approved','expired')''')]
+        for identity in ids:
+            for table,column in (('prepared_posts','story_id'),('story_media','story_id'),('story_attachments','story_id'),
+                                 ('news_items','story_id'),('observations','story_id'),('stories','id')):
+                if c.execute('SELECT 1 FROM sqlite_master WHERE type="table" AND name=?',(table,)).fetchone():
+                    c.execute('DELETE FROM '+table+' WHERE '+column+'=?',(identity,))
+    return len(ids)
+
+
 def expire_queue():
     """Remove expired pending payloads, retaining small URL/dedup history."""
     with database() as c:

@@ -78,6 +78,8 @@ At collection time all eligible candidates are prepared and ranked once. Freshne
 
 Typical shelf lives:
 
+Intake is stricter than queue retention: each collection only admits source timestamps in `(collection start − 2 hours, collection start]`. Every source shares this same cutoff, so a slow fetch does not shift the window. Reports record both bounds. Existing queued items can remain until their 24-hour maximum or earlier content deadline; normal collections do not empty the queue. An explicitly requested reset deletes only pending items and their source/media/editorial references, preserving published/reserved history and reply data.
+
 - Six hours: outages, evacuation/weather/air-raid alerts and live results.
 - Twelve hours: market-price updates and explicitly short-lived phrasing.
 - Twenty-four hours: ordinary news.

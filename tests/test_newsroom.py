@@ -26,6 +26,15 @@ class DatabaseCase(unittest.TestCase):
         return newsroom.enqueue([row],priority,['ClashReport','bricsnews'])
 
 class EditorialTests(DatabaseCase):
+    def test_only_last_two_hours_are_accepted_at_fixed_collection_cutoff(self):
+        end=app.now()
+        for number,(age,accepted) in enumerate(((0,True),(7199,True),(7200,False),(7201,False),(-1,False))):
+            row=dict(title=TEXT+str(number),source='Telegram @ClashReport',
+                     url='https://t.me/ClashReport/'+str(number+10),published=end-age)
+            result=newsroom.enqueue([row],1.8,[],window_end=end)
+            # Numeric differences make these distinct updates for deduplication.
+            self.assertEqual(result['added'],int(accepted))
+            self.assertEqual(result['rejected'],int(not accepted))
     def test_news_preserved_while_tags_and_subscription_footer_removed(self):
         text = TEXT+'\n@ClashReport\n#Breaking #News\nSubscribe to our channel for updates'
         self.assertEqual(newsroom.clean_text(text,['ClashReport']),TEXT)
