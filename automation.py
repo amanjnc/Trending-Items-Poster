@@ -15,6 +15,13 @@ class PostingRejected(RuntimeError):
         self.category=category
         super().__init__('X rejected the posting request')
 
+
+class PostOutcomeUncertain(RuntimeError):
+    def __init__(self,status=None,category='unexpected_response'):
+        self.status=status if isinstance(status,int) and 100<=status<=599 else None
+        self.category=category
+        super().__init__('TweetKit-X did not confirm a successful post')
+
 def authorization():
     """Validate a session locally; never print or save cookie values."""
     cookie = os.environ.get('TWEETKIT_COOKIE')
@@ -51,7 +58,11 @@ def send(text,image_path=None):
         raise PostingRejected(status,category)
     if result.get('ok') is not True or not str(result.get('id', '')).isdigit():
         # Upstream response bodies may contain sensitive information. Do not log them.
-        raise RuntimeError('TweetKit-X did not confirm a successful post')
+        detail=str(result.get('error','')).casefold()[:1000]
+        category=('automation_restriction' if 'automat' in detail else 'account_access' if any(n in detail for n in ('authenticate','authentication','suspended','account locked')) else
+                  'rate_limit' if 'rate limit' in detail else 'duplicate' if 'duplicate' in detail else
+                  'media_rejected' if 'media' in detail else 'unexpected_response')
+        raise PostOutcomeUncertain(result.get('status'),category)
     return str(result['id'])
 
 

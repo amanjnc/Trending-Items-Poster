@@ -195,11 +195,13 @@ def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120, story_id=N
             checkpoint()
             return {'publishing':'paused: X rejected account access' if outcome=='account_blocked' else 'media upload failed before posting; item skipped' if upload else 'X rejected this post; item skipped',
                     'failure_category':category,'http_status':status,'source_url':row['source_url']}
-        except Exception:
+        except Exception as error:
             with database() as c:
-                c.execute('INSERT OR REPLACE INTO posting_events VALUES(?,?,?,?,?)',(row['story_id'],'create_tweet','outcome_uncertain',None,app.now()))
+                category=error.category if isinstance(error,automation.PostOutcomeUncertain) else 'outcome_uncertain'
+                status=error.status if isinstance(error,automation.PostOutcomeUncertain) else None
+                c.execute('INSERT OR REPLACE INTO posting_events VALUES(?,?,?,?,?)',(row['story_id'],'create_tweet',category,status,app.now()))
             checkpoint()
-            return {'publishing':'paused: posting outcome uncertain'}
+            return {'publishing':'paused: posting outcome uncertain','failure_category':category,'http_status':status}
         with database() as c:
             c.execute('UPDATE publications SET state="posted",post_id=? WHERE story_id=?',(post_id,row['story_id']))
         cleanup_posted()
