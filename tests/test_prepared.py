@@ -443,6 +443,12 @@ class SelectedPostTests(FixtureCase):
             c.execute('INSERT INTO publications VALUES(?,?,?,?)',(identity,app.now(),'posted','123'))
         with patch('newsroom.telegram') as source,patch('automation.send') as send:
             report=selected_post.run(Mock(),self.url,live=True)
+        self.assertTrue(report['ok']);source.assert_not_called();send.assert_not_called()
+        self.assertEqual(report['post_id'],'123')
+        with newsroom.database() as c:
+            c.execute('UPDATE publications SET state="uncertain",post_id=NULL WHERE story_id=?',(identity,))
+        with patch('newsroom.telegram') as source,patch('automation.send') as send:
+            report=selected_post.run(Mock(),self.url,live=True)
         self.assertFalse(report['ok']);source.assert_not_called();send.assert_not_called()
     def test_unconfigured_sources_rejected_before_network(self):
         with patch('newsroom.telegram') as source:

@@ -22,6 +22,9 @@ def run(state,source_url,live=False):
     with newsroom.database() as c:
         prior=c.execute('SELECT p.state,p.post_id FROM publications p JOIN observations o ON o.story_id=p.story_id WHERE o.url=?',(source_url,)).fetchone()
     if prior:
+        if prior['state']=='posted':
+            return {'ok':True,'publishing':'already posted; skipped without sending a repeat',
+                    'post_id':prior['post_id'],'source_url':source_url}
         return {'ok':False,'publishing':'selected item already reserved or posted; no repeat sent','source_url':source_url}
     # Inspect the actual message HTML, not its cached thumbnail URL.
     rows=newsroom.telegram(source['channel'],pages=1,message_id=match[2])
