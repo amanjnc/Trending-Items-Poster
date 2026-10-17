@@ -1,0 +1,18 @@
+{
+  "telegram": [
+    {"channel": "bricsnews", "priority": 1.0},
+    {"channel": "hitech", "priority": 1.0},
+    {"channel": "hiaimediaen", "priority": 1.0},
+    {"channel": "Cointelegraph001", "priority": 1.0},
+    {"channel": "cointelegraph", "priority": 1.0},
+    {"channel": "nytimes", "priority": 1.0},
+    {"channel": "WatcherGuru", "priority": 1.0},
+    {"channel": "rtnews", "priority": 1.0},
+    {"channel": "ClashReport", "priority": 1.8},
+    {"channel": "DDGeopolitics", "priority": 1.0}
+  ],
+  "rss": [{"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml", "priority": 1.0}],
+  "collection_seconds": 7200,
+  "telegram_pages": 3,
+  "daily_limit": 400
+}

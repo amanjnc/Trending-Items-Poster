@@ -1,0 +1,57 @@
+name: News queue
+on:
+  schedule:
+    - cron: '7 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Publish news (off = collection and queue preview only)'
+        type: boolean
+        default: false
+      test_two:
+        description: 'Stop after two posts (still spaced 2–4 minutes apart)'
+        type: boolean
+        default: true
+permissions:
+  contents: write
+concurrency:
+  group: x-autopost-history
+  cancel-in-progress: false
+jobs:
+  queue:
+    if: github.event_name == 'workflow_dispatch' || vars.NEWS_QUEUE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test without account credentials
+        run: python -m unittest discover -s tests -v
+      - name: Collect, rank and publish one at a time
+        env:
+          TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
+          TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
+          LIVE: ${{ github.event_name == 'schedule' || inputs.live }}
+          TEST_TWO: ${{ inputs.test_two }}
+          AUTO_LIKE: ${{ vars.AUTO_LIKE_REPLIES != 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--minutes 115)
+          if [[ "$LIVE" == "true" ]]; then args+=(--live --check-replies); fi
+          if [[ "$TEST_TWO" == "true" ]]; then args+=(--max-posts 2); fi
+          if [[ "$AUTO_LIKE" == "true" ]]; then args+=(--auto-like); fi
+          python queue_worker.py "${args[@]}"
+      - name: Save queue and reply report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: posting-report.json
+          if-no-files-found: ignore
+          retention-days: 7

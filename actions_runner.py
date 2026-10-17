@@ -93,6 +93,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--live', action='store_true')
     p.add_argument('--initialize', action='store_true')
+    p.add_argument('--history-only', action='store_true')
     p.add_argument('--batch', type=int, default=2)
     p.add_argument('--sources', nargs='+', choices=['hn', 'trends', 'techcrunch'], default=['techcrunch'])
     p.add_argument('--daily-limit', type=int, default=400)
@@ -109,6 +110,9 @@ def main():
             raise StateError('Reconciliation must be a dry run.')
         state.reconcile(args.reconcile_story, args.confirmed_post_id, args.confirm_not_posted)
         print('History reconciled; no post was sent.')
+        return
+    if args.history_only:
+        print('Posting history ready; no collection or X writes performed.')
         return
     if args.live:
         automation.authorization()

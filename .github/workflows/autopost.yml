@@ -1,13 +1,9 @@
-name: Automatic X posting
+name: Posting history setup and recovery
 on:
   workflow_dispatch:
     inputs:
-      live:
-        description: 'Post up to TWO TechCrunch stories (off = preview)'
-        type: boolean
-        default: false
       initialize:
-        description: 'Initialize history (first run only; leave live off)'
+        description: 'Initialize history (first run only)'
         type: boolean
         default: false
       reconcile_story:
@@ -41,11 +37,9 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run tests without account credentials
         run: python -m unittest discover -s tests -v
-      - name: Collect and publish batch
+      - name: Initialize or reconcile posting history
         env:
-          TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
           TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
-          LIVE: ${{ inputs.live }}
           INITIALIZE: ${{ inputs.initialize }}
           RECONCILE_STORY: ${{ inputs.reconcile_story }}
           CONFIRMED_POST_ID: ${{ inputs.confirmed_post_id }}
@@ -53,15 +47,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=(--batch 2 --sources techcrunch --daily-limit 400 --interval 5)
-          if [[ "$LIVE" == "true" ]]; then args+=(--live); fi
-          if [[ "$INITIALIZE" == "true" ]]; then
-            if [[ "$LIVE" == "true" ]]; then
-              echo 'Initialize history in a dry run first.'
-              exit 1
-            fi
-            args+=(--initialize)
-          fi
+          args=(--history-only)
+          if [[ "$INITIALIZE" == "true" ]]; then args+=(--initialize); fi
           if [[ -n "$RECONCILE_STORY" ]]; then
             args+=(--reconcile-story "$RECONCILE_STORY" --confirmed-post-id "$CONFIRMED_POST_ID")
             if [[ "$CONFIRM_NOT_POSTED" == "true" ]]; then args+=(--confirm-not-posted); fi

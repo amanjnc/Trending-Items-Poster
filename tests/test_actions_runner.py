@@ -93,6 +93,21 @@ class HistoryTests(unittest.TestCase):
         GitState(self.checkout('next'))
         with automation.ledger() as c:
             self.assertEqual(c.execute('SELECT post_id FROM publications').fetchone()[0], '42')
+    def test_new_queue_and_pending_likes_survive_git_history_restore(self):
+        import newsroom
+        state = GitState(self.repo, initialize=True)
+        newsroom.enqueue([dict(title='A new satellite launched today to improve communications across remote regions around the world.',url='https://t.me/ClashReport/1',source='Telegram @ClashReport',published=app.now())],1.8,['ClashReport'])
+        newsroom.state_set('next_post_at',app.now()+240)
+        with newsroom.database() as c:
+            c.execute('INSERT INTO reply_actions VALUES(?,?,?,?,?)',('123','99','A reply','pending',app.now()))
+        state.checkpoint()
+        app.DB = self.root/'restored-queue.db'
+        GitState(self.checkout('restored-queue'))
+        self.assertEqual(len(newsroom.queue()),1)
+        self.assertGreater(newsroom.state_get('next_post_at'),app.now())
+        with newsroom.database() as c:
+            self.assertEqual(c.execute('SELECT state FROM reply_actions WHERE reply_id="123"').fetchone()[0],'pending')
+
     def test_stale_writer_cannot_overwrite_history(self):
         first = GitState(self.repo, initialize=True)
         app.DB = self.root / 'second.db'
