@@ -5,6 +5,16 @@ import os
 import time
 import app
 
+class MediaUploadFailed(RuntimeError):
+    """No CreateTweet request was made."""
+
+
+class PostingRejected(RuntimeError):
+    def __init__(self,status,category):
+        self.status=status
+        self.category=category
+        super().__init__('X rejected the posting request')
+
 def authorization():
     """Validate a session locally; never print or save cookie values."""
     cookie = os.environ.get('TWEETKIT_COOKIE')
@@ -21,7 +31,24 @@ def authorization():
 
 def send(text,image_path=None):
     client=authorization()
-    result = client.post(text,image_path=str(image_path)) if image_path else client.post(text)
+    if image_path:
+        # Uploading media does not publish a tweet. Keep this boundary explicit so
+        # a failed video upload cannot falsely pause all posting as an unknown send.
+        try:
+            media_id=client.upload_media(str(image_path))
+            if not str(media_id).isdigit():
+                raise ValueError('Media upload was not confirmed')
+        except Exception:
+            raise MediaUploadFailed('Media upload failed before tweet creation') from None
+        result=client.create_tweet(text,[str(media_id)])
+    else:
+        result=client.post(text)
+    if result.get('ok') is False and result.get('status') in (400,401,403,404,422,429):
+        status=result['status']
+        detail=str(result.get('error','')).casefold()
+        category=('duplicate' if 'duplicate' in detail else 'rate_limit' if status==429 else
+                  'account_access' if status in (401,403) else 'invalid_request')
+        raise PostingRejected(status,category)
     if result.get('ok') is not True or not str(result.get('id', '')).isdigit():
         # Upstream response bodies may contain sensitive information. Do not log them.
         raise RuntimeError('TweetKit-X did not confirm a successful post')

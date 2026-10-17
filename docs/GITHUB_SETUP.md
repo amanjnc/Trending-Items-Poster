@@ -62,6 +62,10 @@ Editing is deterministic and free: concise wording, source-footer removal, relev
 
 ## Images and links
 
+Media uploads now finish before the tweet-creation request starts. A failed upload is recorded as `media_failed` and skipped without pausing the whole queue; it cannot have created a tweet. Explicit X HTTP rejections are recorded with safe status/category metadata. Rate limits and account-access rejections use a thirty-minute cooldown. An unknown response after tweet creation still pauses to avoid automatic duplicates. The small `publication_payloads` receipt preserves the exact attempted wording even when later collections rebuild the prepared queue. Raw session data and X response bodies are never logged.
+
+An operator can quarantine a stale uncertain attempt as `quarantined_uncertain` to resume other stories while keeping that story permanently reserved. This does not establish whether the old attempt appeared on X and does not resend it. Preserve its receipt and publication history for later reconciliation.
+
 Among candidates eligible under the hard source-spacing rule, the queue uses this format order: **text + image > text > text + image + outbound link > text + outbound link**. Freshness, source priority and content detail order items within each format. Source spacing is a hard constraint and takes priority over format preference. Expiry and promotional-content filters apply before ranking.
 
 The collector captures Telegram photo references and supported RSS/publisher image URLs. Telegram's `telesco.pe` and `cdn-telegram.org` image hosts are supported. One image can be uploaded with a post. Binary media is not packed into the Git history database: the publisher fetches the one selected image from a restricted source-host allowlist and uploads it to X. Redirects, format signatures and a 2.5 MB cap are checked. This extra network work can make image posts slower than text-only posts. Missing/unsupported images fall back to text before sending; failures after a public send attempt pause rather than risking a duplicate.

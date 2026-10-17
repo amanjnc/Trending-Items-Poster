@@ -261,6 +261,34 @@ class PreparationTests(FixtureCase):
         self.assertLessEqual(postcraft.weight(linked.rsplit('\n',1)[0])+24,280)
 
 class FastPublisherTests(FixtureCase):
+    def test_failed_upload_is_recorded_without_pausing_the_next_story(self):
+        identity=self.add('A detailed news story with enough context for publishing to our readers.',1,source='A')
+        next_id=self.add('Another detailed news story with enough context for publishing to our readers.',2,source='B')
+        self.ready(identity,position=0);self.ready(next_id,position=1)
+        with patch('automation.authorization'),patch('automation.send',side_effect=automation.MediaUploadFailed('upload failed')):
+            report=prepared.publish_one(lambda:None,live=True)
+        self.assertEqual(report['failure_category'],'upload_failed')
+        with prepared.database() as c:
+            self.assertEqual(c.execute('SELECT state FROM publications WHERE story_id=?',(identity,)).fetchone()[0],'media_failed')
+            self.assertEqual(c.execute('SELECT text FROM publication_payloads WHERE story_id=?',(identity,)).fetchone()[0],'Prepared post text')
+            self.assertIsNone(prepared.gate(c,400,0))
+    def test_rate_limit_has_finite_backoff_and_never_repeats_rejected_item(self):
+        identity=self.add('A detailed news story with enough context for publishing to our readers.')
+        self.ready(identity)
+        with patch('automation.authorization'),patch('automation.send',side_effect=automation.PostingRejected(429,'rate_limit')):
+            report=prepared.publish_one(lambda:None,live=True)
+        self.assertEqual(report['http_status'],429)
+        with prepared.database() as c:
+            self.assertIn('cooldown',prepared.gate(c,400,0))
+            self.assertEqual(c.execute('SELECT state FROM publications').fetchone()[0],'rejected')
+        self.assertIsNone(prepared.next_post())
+    def test_quarantined_attempt_stays_reserved_without_stopping_other_posts(self):
+        identity=self.add('An uncertain old story which must not be sent again during recovery.')
+        self.ready(identity)
+        with prepared.database() as c:
+            c.execute('INSERT INTO publications VALUES(?,?,?,NULL)',(identity,app.now()-3600,'quarantined_uncertain'))
+            self.assertIsNone(prepared.gate(c,400,0))
+        self.assertIsNone(prepared.next_post())
     def test_explicit_reset_clears_pending_payloads_but_preserves_posting_history(self):
         for n in range(1,4):
             identity=self.add('A detailed news update explains recent developments with important context for readers.',n,

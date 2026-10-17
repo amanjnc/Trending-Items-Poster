@@ -20,7 +20,10 @@ def database():
         CREATE INDEX IF NOT EXISTS prepared_position ON prepared_posts(position);
         CREATE TABLE IF NOT EXISTS entity_cache (
         handle TEXT PRIMARY KEY, value TEXT NOT NULL, expires REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS identity_discovery (name TEXT PRIMARY KEY, value TEXT NOT NULL, expires REAL NOT NULL);''')
+        CREATE TABLE IF NOT EXISTS identity_discovery (name TEXT PRIMARY KEY, value TEXT NOT NULL, expires REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS publication_payloads (story_id TEXT PRIMARY KEY,text TEXT NOT NULL,format TEXT NOT NULL,attempted REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS posting_events (story_id TEXT PRIMARY KEY,phase TEXT NOT NULL,category TEXT NOT NULL,http_status INTEGER,recorded REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS posting_backoff (category TEXT PRIMARY KEY,until_time REAL NOT NULL);''')
     return c
 
 
@@ -83,6 +86,10 @@ def download_media(url, directory, video=False):
 def gate(c,daily_limit,min_gap):
     if c.execute('SELECT 1 FROM publications WHERE state="uncertain"').fetchone():
         return 'paused: uncertain prior post'
+    if c.execute('SELECT 1 FROM publications WHERE state="account_blocked" AND attempted>?',(app.now()-1800,)).fetchone():
+        return 'paused: X rejected account access; 30-minute cooldown; check session or account restrictions'
+    if c.execute('SELECT 1 FROM posting_backoff WHERE until_time>?',(app.now(),)).fetchone():
+        return 'X rate-limit cooldown; exiting without posting'
     if c.execute('SELECT COUNT(*) FROM publications WHERE attempted>?',(app.now()-86400,)).fetchone()[0]>=daily_limit:
         return 'daily limit reached'
     last=c.execute('SELECT MAX(attempted) FROM publications').fetchone()[0]
@@ -166,10 +173,32 @@ def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120, story_id=N
                 return {'publishing':'candidate expired; exiting'}
             if not c.execute('INSERT OR IGNORE INTO publications VALUES(?,?,?,NULL)',(row['story_id'],app.now(),'uncertain')).rowcount:
                 return {'publishing':'already reserved'}
+            c.execute('INSERT OR REPLACE INTO publication_payloads VALUES(?,?,?,?)',(row['story_id'],row['text'],row['format'],app.now()))
         checkpoint()
         try:
             post_id=automation.send(row['text'],image_path=image) if image else automation.send(row['text'])
+        except (automation.MediaUploadFailed,automation.PostingRejected) as error:
+            upload=isinstance(error,automation.MediaUploadFailed)
+            category='upload_failed' if upload else error.category
+            status=None if upload else error.status
+            outcome='media_failed' if upload else 'account_blocked' if category=='account_access' else 'rejected'
+            with database() as c:
+                c.execute('UPDATE publications SET state=? WHERE story_id=?',(outcome,row['story_id']))
+                c.execute('INSERT OR REPLACE INTO posting_events VALUES(?,?,?,?,?)',(row['story_id'],'upload' if upload else 'create_tweet',category,status,app.now()))
+                if category=='rate_limit':
+                    c.execute('INSERT OR REPLACE INTO posting_backoff VALUES(?,?)',('rate_limit',app.now()+1800))
+                if outcome!='account_blocked':
+                    c.execute('DELETE FROM prepared_posts WHERE story_id=?',(row['story_id'],))
+                    for table in ('story_media','story_attachments'):
+                        if c.execute('SELECT 1 FROM sqlite_master WHERE type="table" AND name=?',(table,)).fetchone():
+                            c.execute('DELETE FROM '+table+' WHERE story_id=?',(row['story_id'],))
+            checkpoint()
+            return {'publishing':'paused: X rejected account access' if outcome=='account_blocked' else 'media upload failed before posting; item skipped' if upload else 'X rejected this post; item skipped',
+                    'failure_category':category,'http_status':status,'source_url':row['source_url']}
         except Exception:
+            with database() as c:
+                c.execute('INSERT OR REPLACE INTO posting_events VALUES(?,?,?,?,?)',(row['story_id'],'create_tweet','outcome_uncertain',None,app.now()))
+            checkpoint()
             return {'publishing':'paused: posting outcome uncertain'}
         with database() as c:
             c.execute('UPDATE publications SET state="posted",post_id=? WHERE story_id=?',(post_id,row['story_id']))

@@ -37,6 +37,33 @@ class AutomationTests(unittest.TestCase):
             self.assertEqual(automation.cycle()['publishing'], 'no fresh candidates')
 
 class TweetKitAdapterTests(unittest.TestCase):
+    def test_upload_failure_never_calls_tweet_creation(self):
+        from unittest.mock import Mock
+        from tweetkit_x import TweetKit
+        client=Mock(spec=TweetKit)
+        client.upload_media.side_effect=TimeoutError('private response details')
+        with patch('automation.authorization',return_value=client):
+            with self.assertRaises(automation.MediaUploadFailed):
+                automation.send('A headline',image_path='/tmp/movie.mp4')
+        client.create_tweet.assert_not_called();client.post.assert_not_called()
+    def test_media_upload_then_creation_use_pinned_sdk_methods(self):
+        from unittest.mock import Mock
+        from tweetkit_x import TweetKit
+        client=Mock(spec=TweetKit)
+        client.upload_media.return_value='123'
+        client.create_tweet.return_value={'ok':True,'id':'456'}
+        with patch('automation.authorization',return_value=client):
+            self.assertEqual(automation.send('A headline',image_path='/tmp/movie.mp4'),'456')
+        client.upload_media.assert_called_once_with('/tmp/movie.mp4')
+        client.create_tweet.assert_called_once_with('A headline',['123'])
+    def test_rejection_metadata_does_not_expose_raw_response(self):
+        from unittest.mock import Mock
+        client=Mock();client.post.return_value={'ok':False,'status':401,'error':'private token information'}
+        with patch('automation.authorization',return_value=client):
+            with self.assertRaises(automation.PostingRejected) as error:
+                automation.send('A headline')
+        self.assertEqual(error.exception.category,'account_access')
+        self.assertNotIn('private token',str(error.exception))
     def test_adapter_checks_success_without_logging_response(self):
         import sys
         import types
