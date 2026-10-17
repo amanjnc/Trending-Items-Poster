@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       live:
-        description: 'Post up to TWO Hacker News stories (off = preview)'
+        description: 'Post up to TWO TechCrunch stories (off = preview)'
         type: boolean
         default: false
       initialize:
@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=(--batch 2 --sources hn --daily-limit 400 --interval 5)
+          args=(--batch 2 --sources techcrunch --daily-limit 400 --interval 5)
           if [[ "$LIVE" == "true" ]]; then args+=(--live); fi
           if [[ "$INITIALIZE" == "true" ]]; then
             if [[ "$LIVE" == "true" ]]; then

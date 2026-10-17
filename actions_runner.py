@@ -94,7 +94,7 @@ def main():
     p.add_argument('--live', action='store_true')
     p.add_argument('--initialize', action='store_true')
     p.add_argument('--batch', type=int, default=2)
-    p.add_argument('--sources', nargs='+', choices=['hn', 'trends'], default=['hn'])
+    p.add_argument('--sources', nargs='+', choices=['hn', 'trends', 'techcrunch'], default=['techcrunch'])
     p.add_argument('--daily-limit', type=int, default=400)
     p.add_argument('--interval', type=int, default=5)
     p.add_argument('--reconcile-story', default='')
@@ -113,7 +113,7 @@ def main():
     if args.live:
         automation.authorization()
     collection = app.collect(args.sources)
-    source_labels = {'hn': 'Hacker News', 'trends': 'Google Trends discovery'}
+    source_labels = {'hn': 'Hacker News', 'trends': 'Google Trends discovery', 'techcrunch': 'TechCrunch'}
     allowed_sources = [source_labels[name] for name in args.sources]
     # Exercise remote persistence even on dry runs; verify access before public writes.
     state.checkpoint()

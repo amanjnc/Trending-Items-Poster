@@ -8,7 +8,7 @@ Collect fresh stories, rank them, remove duplicate URLs, and publish attributed 
 
 ## GitHub automation
 
-The `Automatic X posting` workflow is currently a **manual, Hacker News-only test**: it attempts up to two posts per live run. Scheduling has been removed, so `AUTOPOST_ENABLED` does not currently start any jobs. Existing Google Trends stories are excluded from selection. The rolling 400-attempt cap and durable duplicate protection remain in place.
+The `Automatic X posting` workflow is currently a **manual, TechCrunch RSS-only test**: it attempts up to two posts per live run. Scheduling has been removed, so `AUTOPOST_ENABLED` does not currently start any jobs. Existing Hacker News and Google Trends stories are excluded from selection. The rolling 400-attempt cap and durable duplicate protection remain in place.
 
 History has already been initialized if your earlier test passed. Run the workflow on `main`, check the live-posting option, leave initialization unchecked, and leave reconciliation fields blank. A green run can still mean fewer than two posts when there are insufficient fresh, unposted candidates or a limit prevents sending. The run report records the outcome.
 Runs retain URL deduplication, posting attempts, and the daily limit across fresh GitHub runners. A reservation is saved remotely before each post. A failed history save prevents posting. Timeouts and uncertain outcomes pause publishing until reconciled. Source checkout files and existing local review decisions are not overwritten. The runner uses a separate database.

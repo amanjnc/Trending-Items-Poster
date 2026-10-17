@@ -69,5 +69,16 @@ class AppTests(unittest.TestCase):
             server.server_close()
             thread.join()
 
+class TechCrunchTests(unittest.TestCase):
+    def test_rss_adapter_uses_actual_article_timestamp_and_skips_missing_dates(self):
+        xml = b'''<rss><channel><item><title>Tech &amp; science</title><link>https://techcrunch.com/story/</link><pubDate>Sat, 17 Oct 2026 10:00:00 +0000</pubDate></item><item><title>No date</title><link>https://techcrunch.com/undated/</link></item><item><title>Bad date</title><link>https://techcrunch.com/bad/</link><pubDate>invalid</pubDate></item></channel></rss>'''
+        with patch('app.fetch', return_value=xml) as fetch:
+            rows = app.techcrunch()
+        fetch.assert_called_once_with('https://techcrunch.com/feed/')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['title'], 'Tech & science')
+        self.assertEqual(rows[0]['source'], 'TechCrunch')
+        self.assertEqual(rows[0]['published'], 1792231200.0)
+
 if __name__ == '__main__':
     unittest.main()

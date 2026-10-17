@@ -1,13 +1,13 @@
-# Two-post Hacker News test on GitHub
+# Two-post TechCrunch RSS test on GitHub
 
-This is currently a manual test. The automatic schedule has been removed. Each live run attempts at most two fresh, unposted Hacker News items. Google Trends candidates already stored in history are excluded. `AUTOPOST_ENABLED` has no effect while the schedule is absent.
+This is currently a manual test. The automatic schedule has been removed. Each live run attempts at most two fresh, unposted TechCrunch items. Hacker News and Google Trends candidates already stored in history are excluded. `AUTOPOST_ENABLED` has no effect while the schedule is absent.
 
 ## Run the test
 
 1. Open your repository's **Actions** tab.
 2. Select **Automatic X posting**.
 3. Click **Run workflow** and select **main**.
-4. Check **Post up to TWO Hacker News stories** (the live-posting option).
+4. Check **Post up to TWO TechCrunch stories** (the live-posting option).
 5. Leave **Initialize history** unchecked if your earlier initialization succeeded.
 6. Leave reconciliation fields blank.
 7. Run the workflow, wait for completion, and inspect your X profile and run report.

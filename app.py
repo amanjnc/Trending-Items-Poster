@@ -98,7 +98,25 @@ def gdelt():
                  published=dt.datetime.strptime(s['seendate'], '%Y%m%dT%H%M%SZ').replace(tzinfo=UTC).timestamp())
             for s in data.get('articles', [])]
 
-SOURCES = {'hn': hn, 'trends': trends, 'gdelt': gdelt}
+def techcrunch():
+    from email.utils import parsedate_to_datetime
+    root = ET.fromstring(fetch('https://techcrunch.com/feed/'))
+    rows = []
+    for item in root.findall('./channel/item'):
+        title, url, date = item.findtext('title'), item.findtext('link'), item.findtext('pubDate')
+        if not title or not url or not date:
+            continue
+        try:
+            published = parsedate_to_datetime(date)
+            if published.tzinfo is None:
+                continue
+            published = published.timestamp()
+        except (ValueError, TypeError, OverflowError):
+            continue
+        rows.append(dict(title=title, url=url, source='TechCrunch', published=published))
+    return rows
+
+SOURCES = {'hn': hn, 'trends': trends, 'gdelt': gdelt, 'techcrunch': techcrunch}
 
 def collect(names):
     results = {}
