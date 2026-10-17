@@ -1,11 +1,9 @@
 name: Automatic X posting
 on:
-  schedule:
-    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
     inputs:
       live:
-        description: 'Send real X posts (leave off for a test)'
+        description: 'Post up to TWO Hacker News stories (off = preview)'
         type: boolean
         default: false
       initialize:
@@ -31,7 +29,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   post:
-    if: github.event_name == 'workflow_dispatch' || vars.AUTOPOST_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -48,7 +45,7 @@ jobs:
         env:
           TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
           TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
-          LIVE: ${{ github.event_name == 'schedule' || inputs.live }}
+          LIVE: ${{ inputs.live }}
           INITIALIZE: ${{ inputs.initialize }}
           RECONCILE_STORY: ${{ inputs.reconcile_story }}
           CONFIRMED_POST_ID: ${{ inputs.confirmed_post_id }}
@@ -56,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=(--batch 5 --daily-limit 400 --interval 5)
+          args=(--batch 2 --sources hn --daily-limit 400 --interval 5)
           if [[ "$LIVE" == "true" ]]; then args+=(--live); fi
           if [[ "$INITIALIZE" == "true" ]]; then
             if [[ "$LIVE" == "true" ]]; then

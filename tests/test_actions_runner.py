@@ -34,7 +34,7 @@ class HistoryTests(unittest.TestCase):
         self.assertFalse(app.DB.exists())
     def test_full_dry_run_creates_report_and_next_runner_restores(self):
         def collect(names):
-            added = app.ingest([dict(title='A candidate', url='https://example.com/candidate', source='Test', published=app.now())])
+            added = app.ingest([dict(title='A candidate', url='https://example.com/candidate', source='Hacker News', published=app.now())])
             return {'fixture': {'added': added}}
         import os
         old_cwd = Path.cwd()
@@ -49,6 +49,38 @@ class HistoryTests(unittest.TestCase):
             app.DB = self.root / 'next-run.db'
             GitState(self.checkout('fresh-run'))
             self.assertEqual(len(app.stories()), 1)
+        finally:
+            os.chdir(old_cwd)
+
+    def test_live_runner_posts_only_two_hn_items_and_preserves_history(self):
+        GitState(self.repo, initialize=True)
+        app.DB = self.root / 'live-run.db'
+        def collect(names):
+            self.assertEqual(names, ['hn'])
+            app.ingest([dict(title=f'HN {i}', url=f'https://example.com/hn/{i}', source='Hacker News', published=app.now()) for i in range(3)] +
+                       [dict(title='Trends headline', url='https://example.com/trends', source='Google Trends discovery', published=app.now(), engagement=99999)])
+            return {'hn': {'received': 3, 'added': 3}}
+        import os
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(self.root)
+            with patch('app.ROOT', self.repo), patch('app.collect', side_effect=collect), patch('sys.argv', ['actions_runner.py', '--live']), patch('automation.authorization'), patch('automation.send', side_effect=['41', '42']) as send, patch('time.sleep'), patch('actions_runner.automation.cycle', wraps=automation.cycle) as cycle:
+                # Advance the test clock between calls without making the suite wait.
+                clock = app.now()
+                def advancing_cycle(*args, **kwargs):
+                    nonlocal clock
+                    clock += 10
+                    with patch('app.now', return_value=clock):
+                        return original_cycle(*args, **kwargs)
+                original_cycle = cycle._mock_wraps
+                cycle.side_effect = advancing_cycle
+                actions_runner.main()
+                self.assertEqual(send.call_count, 2)
+                self.assertTrue(all('HN ' in call.args[0] for call in send.call_args_list))
+            app.DB = self.root / 'verify-live.db'
+            GitState(self.checkout('verify-live'))
+            with automation.ledger() as c:
+                self.assertEqual(c.execute('SELECT COUNT(*) FROM publications WHERE state="posted"').fetchone()[0], 2)
         finally:
             os.chdir(old_cwd)
 
@@ -114,6 +146,14 @@ class ReservationTests(unittest.TestCase):
         with patch('automation.authorization'), patch('automation.send', side_effect=send):
             automation.cycle(True, checkpoint=checkpoint, collection={})
         self.assertEqual(events, ['uncertain', 'send', 'posted'])
+    def test_source_filter_excludes_existing_trends_stories(self):
+        app.ingest([dict(title='Google candidate', url='https://example.com/google', source='Google Trends discovery', published=app.now(), engagement=99999),
+                    dict(title='HN candidate', url='https://example.com/hn', source='Hacker News', published=app.now())])
+        with patch('automation.authorization'), patch('automation.send', return_value='42') as send:
+            automation.cycle(True, collection={}, allowed_sources=['Hacker News'])
+            self.assertIn('HN candidate', send.call_args.args[0])
+            self.assertNotIn('Google candidate', send.call_args.args[0])
+
     def test_daily_cap_honored(self):
         with automation.ledger() as c:
             c.executemany('INSERT INTO publications VALUES(?,?,?,NULL)', [(str(i),app.now()-60,'posted') for i in range(400)])

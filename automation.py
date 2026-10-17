@@ -33,15 +33,23 @@ def ledger():
     c.commit()
     return c
 
-def cycle(live=False, daily_limit=400, interval=216, checkpoint=None, collection=None):
+def cycle(live=False, daily_limit=400, interval=216, checkpoint=None, collection=None, allowed_sources=None):
     if daily_limit < 1 or interval < 1:
         raise ValueError("Daily limit and interval must be positive")
     results = collection if collection is not None else app.collect(['hn', 'trends'])
     # Recompute freshness now; stored discovery scores otherwise become stale.
     with ledger() as c:
-        candidates = [dict(r) for r in c.execute('''SELECT s.* FROM stories s LEFT JOIN publications p ON p.story_id=s.id
-            WHERE p.story_id IS NULL AND s.status IN ('new','approved') AND s.published>=?
-            AND s.published<=? ORDER BY s.score DESC LIMIT 100''', (app.now()-24*3600, app.now()))]
+        params = [app.now()-24*3600, app.now()]
+        source_clause = ''
+        if allowed_sources is not None:
+            if not allowed_sources:
+                raise ValueError('At least one source must be allowed')
+            source_clause = ' AND s.source IN (' + ','.join('?' for _ in allowed_sources) + ')'
+            params.extend(allowed_sources)
+        candidates = [dict(r) for r in c.execute(
+            "SELECT s.* FROM stories s LEFT JOIN publications p ON p.story_id=s.id "
+            "WHERE p.story_id IS NULL AND s.status IN ('new','approved') AND s.published>=? "
+            "AND s.published<=?" + source_clause + " ORDER BY s.score DESC LIMIT 100", params)]
     if not candidates:
         return {'collection': results, 'publishing': 'no fresh candidates'}
     s = max(candidates, key=lambda s: s['score'] / (1 + (app.now()-s['published'])/28800))

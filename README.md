@@ -8,8 +8,9 @@ Collect fresh stories, rank them, remove duplicate URLs, and publish attributed 
 
 ## GitHub automation
 
-The `Automatic X posting` workflow runs every 15 minutes when repository variable `AUTOPOST_ENABLED=true`. Each run can post up to five stories; a persistent rolling daily limit caps attempts at 400. Initialize the `autopost-state` history branch with a manual dry run first, then configure the `TWEETKIT_COOKIE` Actions secret and test a live batch. All steps are documented in the guide.
+The `Automatic X posting` workflow is currently a **manual, Hacker News-only test**: it attempts up to two posts per live run. Scheduling has been removed, so `AUTOPOST_ENABLED` does not currently start any jobs. Existing Google Trends stories are excluded from selection. The rolling 400-attempt cap and durable duplicate protection remain in place.
 
+History has already been initialized if your earlier test passed. Run the workflow on `main`, check the live-posting option, leave initialization unchecked, and leave reconciliation fields blank. A green run can still mean fewer than two posts when there are insufficient fresh, unposted candidates or a limit prevents sending. The run report records the outcome.
 Runs retain URL deduplication, posting attempts, and the daily limit across fresh GitHub runners. A reservation is saved remotely before each post. A failed history save prevents posting. Timeouts and uncertain outcomes pause publishing until reconciled. Source checkout files and existing local review decisions are not overwritten. The runner uses a separate database.
 
 400/day is a target, not a minimum guarantee. Source shortages, login challenges, rate limits, and delayed GitHub schedules reduce volume. Standard public-repository runners are generally free; private-repository minutes depend on your plan. TweetKit's author warns of account restrictions because this uses unofficial X web endpoints. No rate-limit or login-challenge bypass is included.
@@ -36,7 +37,7 @@ Local automation preview:
 python automation.py
 ```
 
-To run live on an optional always-on host, supply `TWEETKIT_COOKIE` as a real process secret and run `python automation.py --live --daemon`. Its default local interval is 216 seconds, with a rolling cap of 400 attempts. GitHub uses five-post batches instead. Never run local and GitHub publishers independently against the same account: they would not share their posting ledgers.
+To run live on an optional always-on host, supply `TWEETKIT_COOKIE` as a real process secret and run `python automation.py --live --daemon`. Its default local interval is 216 seconds, with a rolling cap of 400 attempts. The current GitHub test uses manual two-post batches instead. Never run local and GitHub publishers independently against the same account: they would not share their posting ledgers.
 
 ## Data and validation limits
 
