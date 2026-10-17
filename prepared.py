@@ -38,7 +38,8 @@ def media_allowed(url):
         p = urllib.parse.urlsplit(url)
         host = p.hostname or ''
         return p.scheme=='https' and not p.username and not p.password and p.port in (None,443) and (
-            host in ('cdn-telegram.org','cdn.vox-cdn.com','www.theverge.com','platform.theverge.com') or
+            host in ('cdn-telegram.org','telesco.pe','cdn.vox-cdn.com','www.theverge.com','platform.theverge.com') or
+            host.endswith('.telesco.pe') or
             host.endswith('.cdn-telegram.org') or host.endswith('.vox-cdn.com'))
     except (ValueError, TypeError):
         return False

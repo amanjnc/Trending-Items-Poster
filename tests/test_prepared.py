@@ -4,6 +4,7 @@ import re
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+from tweetkit_x import TweetKit
 
 import app
 import automation
@@ -37,13 +38,45 @@ class FixtureCase(unittest.TestCase):
             c.execute('INSERT OR REPLACE INTO prepared_posts VALUES(?,?,?,?,?,?,?,?,?,?)',(identity,text,media,'https://t.me/ClashReport/'+identity,'text_image' if media else 'text',rank,expires or app.now()+3600,position,'{}',app.now()))
 
 class EntityTests(FixtureCase):
+    def test_canadas_carney_is_tagged_with_confirmed_account(self):
+        body="Canada's Carney: We've got to take care of ourselves, and we always take care of each other."
+        entities=postcraft.resolve_entities([body],client=self.profile_client())
+        result=postcraft.compose({'body':body,'url':'https://example.com'},entities)
+        self.assertEqual(result,"@MarkJCarney: We've got to take care of ourselves, and we always take care of each other.")
+    def test_contextual_surname_does_not_leak_between_posts(self):
+        client=self.profile_client()
+        body='Carney says Canadian businesses need more trading options.'
+        entities=postcraft.resolve_entities([body],client=client)
+        self.assertIn('@MarkJCarney',postcraft.replace_mentions(body,entities))
+        self.assertEqual(postcraft.replace_mentions('Carney won a local school prize.',entities),'Carney won a local school prize.')
+        client.reset_mock()
+        self.assertEqual(postcraft.resolve_entities(['Canada has new policies.','Carney won a local school prize.'],client=client),[])
+        client.user_profile.assert_not_called()
+    def test_legacy_failed_lookups_are_retried_after_sdk_fix(self):
+        with prepared.database() as c:
+            c.execute('INSERT INTO entity_cache VALUES(?,?,?)',('replit',json.dumps(dict(valid=False,names=[])),app.now()+21600))
+        client=self.profile_client()
+        self.assertEqual(postcraft.resolve_entities(['Replit'],client=client)[0]['handle'],'Replit')
+        client.user_profile.assert_called_once_with('Replit')
+    def test_installed_sdk_profile_method_and_response_are_used(self):
+        # Execute the pinned SDK method; mock only its HTTP boundary, without credentials.
+        client=TweetKit.__new__(TweetKit)
+        client.timeout=8
+        client._headers=Mock(return_value={})
+        client._session=Mock()
+        client._session.get.return_value.json.return_value={'data':{'user':{'result':{
+            'rest_id':'123','core':{'screen_name':'MarkJCarney','name':'Mark Carney'},'legacy':{}}}}}
+        entities=postcraft.resolve_entities(["Canada's Carney spoke today."],client=client)
+        self.assertEqual(entities[0]['handle'],'MarkJCarney')
+        self.assertIn('UserByScreenName',client._session.get.call_args.args[0])
+        self.assertEqual(newsroom.state_get('identity_resolution')['markjcarney'],'verified')
     def profile_client(self):
-        client=Mock()
-        lookup={'replit':('Replit','Replit'),'anthropicai':('AnthropicAI','Anthropic'),'amasad':('amasad','Amjad Masad'),'markwahlberg':('markwahlberg','Mark Wahlberg')}
+        client=Mock(spec=TweetKit)
+        lookup={'replit':('Replit','Replit'),'anthropicai':('AnthropicAI','Anthropic'),'amasad':('amasad','Amjad Masad'),'markwahlberg':('markwahlberg','Mark Wahlberg'),'markjcarney':('MarkJCarney','Mark Carney')}
         def profile(handle):
             username,name=lookup[handle.lower()]
             return dict(ok=True,id='123',username=username,name=name)
-        client.get_user_profile.side_effect=profile
+        client.user_profile.side_effect=profile
         return client
     def test_requested_company_and_named_speaker_example(self):
         client=self.profile_client()
@@ -72,23 +105,23 @@ class EntityTests(FixtureCase):
         self.assertIn('@markwahlberg wants',final)
         self.assertNotIn('has launched',final)
     def test_lookup_failure_keeps_names(self):
-        client=Mock();client.get_user_profile.side_effect=RuntimeError('private HTTP details')
+        client=Mock(spec=TweetKit);client.user_profile.side_effect=RuntimeError('private HTTP details')
         entities=postcraft.resolve_entities(['Replit'],client=client)
         self.assertEqual(entities,[])
         self.assertEqual(postcraft.replace_mentions('Replit announced an update.',entities),'Replit announced an update.')
     def test_wrong_display_identity_is_not_accepted(self):
-        client=Mock();client.get_user_profile.return_value=dict(ok=True,id='1',username='Replit',name='Unrelated person')
+        client=Mock(spec=TweetKit);client.user_profile.return_value=dict(ok=True,id='1',username='Replit',name='Unrelated person')
         self.assertEqual(postcraft.resolve_entities(['Replit'],client=client),[])
     def test_valid_identity_is_cached(self):
         client=self.profile_client()
         first=postcraft.resolve_entities(['Replit'],client=client)
         second=postcraft.resolve_entities(['Replit'],client=client)
         self.assertEqual(first,second)
-        self.assertEqual(client.get_user_profile.call_count,1)
+        self.assertEqual(client.user_profile.call_count,1)
     def test_unknown_name_is_not_guessed(self):
         client=self.profile_client()
         self.assertEqual(postcraft.resolve_entities(['Some Unknown Founder'],client=client),[])
-        client.get_user_profile.assert_not_called()
+        client.user_profile.assert_not_called()
     def test_already_tagged_entities_not_double_tagged(self):
         self.assertEqual(postcraft.replace_mentions('@Replit and Replit',[dict(names=['Replit'],handle='Replit')]),'@Replit and @Replit')
     def test_ambiguous_common_nouns_not_tagged(self):
@@ -96,6 +129,17 @@ class EntityTests(FixtureCase):
         self.assertEqual(postcraft.replace_mentions('Apple pie research and Meta-analysis.',entities),'Apple pie research and Meta-analysis.')
 
 class PreparationTests(FixtureCase):
+    def test_strict_four_format_order_overrides_freshness_and_diversity(self):
+        # The oldest, lower-scored image still precedes the newest text-only item.
+        base='A detailed research guide explains the future of battery technology and energy storage.'
+        self.add(base+' Read the full report for details.',1,media='https://cdn4.telesco.pe/file/one.jpg')
+        self.add(base,2)
+        self.add(base+' Read the full report for details.',3)
+        self.add(base,4,age=3*86400,media='https://cdn4.telesco.pe/file/four.jpg')
+        postcraft.prepare()
+        with prepared.database() as c:
+            formats=[r[0] for r in c.execute('SELECT format FROM prepared_posts ORDER BY position')]
+        self.assertEqual(formats,['text_image','text','text_image_link','text_link'])
     def test_country_abbreviation_stays_in_sentence(self):
         body='Canada trades more with the U.S. than elsewhere.'
         self.assertEqual(postcraft.compose({'body':body,'url':'https://example.com'},[]),body)
@@ -210,9 +254,10 @@ class FastPublisherTests(FixtureCase):
         self.assertEqual(report['format'],'text')
         self.assertEqual(send.call_count,1)
     def test_media_hosts_restricted(self):
-        for url in ('http://127.0.0.1/img','https://cdn-telegram.org.evil.example/img','file:///tmp/image','https://user:pass@cdn-telegram.org/img'):
+        for url in ('http://127.0.0.1/img','https://cdn-telegram.org.evil.example/img','https://cdn4.telesco.pe.evil.example/img','file:///tmp/image','https://user:pass@cdn-telegram.org/img'):
             self.assertFalse(prepared.media_allowed(url))
         self.assertTrue(prepared.media_allowed('https://cdn4.cdn-telegram.org/file/photo.jpg'))
+        self.assertTrue(prepared.media_allowed('https://cdn4.telesco.pe/file/photo.jpg'))
     def test_uncertain_send_is_never_retried(self):
         identity=self.add('A freshly collected news update that is ready to be posted to our account.')
         self.ready(identity)
@@ -286,7 +331,7 @@ class DiscoveryTests(FixtureCase):
         with patch('app.fetch',side_effect=self.wikidata_fetch):
             discovered=postcraft.discover_entities(['Ada Example announced a new research project.'])
         self.assertEqual(discovered[0]['handle'],'AdaExample')
-        client=Mock();client.get_user_profile.return_value=dict(ok=True,id='123',username='AdaExample',name='Ada Example')
+        client=Mock(spec=TweetKit);client.user_profile.return_value=dict(ok=True,id='123',username='AdaExample',name='Ada Example')
         entities=postcraft.resolve_entities(['Ada Example'],discovered,client)
         self.assertEqual(postcraft.replace_mentions('Ada Example announced a project.',entities),'@AdaExample announced a project.')
     def test_ambiguous_search_is_not_used(self):

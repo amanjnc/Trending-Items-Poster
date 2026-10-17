@@ -1,6 +1,13 @@
 {
   "entities": [
     {
+      "names": ["Mark Carney", "Canada's Carney", "Canada’s Carney"],
+      "contextual_names": [{"name": "Carney", "context": "\\b(?:Canada|Canadian|Ottawa)\\b"}],
+      "handle": "MarkJCarney",
+      "profile_names": ["Mark Carney"],
+      "reference": "https://x.com/MarkJCarney"
+    },
+    {
       "names": [
         "Mark Wahlberg"
       ],

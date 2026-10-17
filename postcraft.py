@@ -16,6 +16,8 @@ import newsroom
 import prepared
 
 REGISTRY = app.ROOT/'entity_map.json'
+PROFILE_CACHE_VERSION = 2
+FORMAT_ORDER = {'text_image': 3, 'text': 2, 'text_image_link': 1, 'text_link': 0}
 
 
 def normalized(value):
@@ -26,18 +28,26 @@ def contains(text,name):
     return bool(re.search(r'(?<![\w@])'+re.escape(name)+r'(?!\w)',text,re.I))
 
 
+def mention_names(text,entity):
+    """Short aliases require their identity context in this same item."""
+    names=list(entity['names'])
+    names.extend(alias['name'] for alias in entity.get('contextual_names',[])
+                 if re.search(alias['context'],text,re.I))
+    return names
+
+
 def resolve_entities(texts, discovered=(), client=None, budget=45):
     """Only curated or explicitly source-linked identities; never guessed handles."""
     identities=json.loads(REGISTRY.read_text())['entities']+list(discovered)
     if client is not None and isinstance(getattr(client,'timeout',None),(int,float)):
         client.timeout=min(client.timeout,8)
     identities=[e|{'names':list(dict.fromkeys(e['names']+[e['handle']]))} for e in identities]
-    body='\n'.join(texts)
     unique={}
     for entity in identities:
-        if any(contains(body,n) for n in entity['names']):
+        if any(contains(text,n) for text in texts for n in mention_names(text,entity)):
             unique.setdefault(entity['handle'].lower(),entity)
     result={}
+    diagnostics={}
     deadline=time.monotonic()+budget
     for key,entity in unique.items():
         if not re.fullmatch(r'[A-Za-z0-9_]{1,15}',entity['handle']):
@@ -47,24 +57,32 @@ def resolve_entities(texts, discovered=(), client=None, budget=45):
         if row:
             cached=json.loads(row[0])
             expected={normalized(n) for n in entity.get('profile_names',entity['names'])}
-            if cached.get('valid') and any(normalized(n) in expected for n in cached.get('names',[])):
-                result[key]=entity|{'names':list(dict.fromkeys(entity['names']+cached.get('names',[])))}
-            continue
+            # Retry legacy negatives: the old implementation called a nonexistent SDK method.
+            if cached.get('resolver_version')==PROFILE_CACHE_VERSION:
+                diagnostics[key]=cached.get('status','unknown')
+                if cached.get('valid') and any(normalized(n) in expected for n in cached.get('names',[])):
+                    result[key]=entity|{'names':list(dict.fromkeys(entity['names']+cached.get('names',[])))}
+                continue
         if client is None or time.monotonic()>=deadline:
+            diagnostics[key]='lookup unavailable' if client is None else 'lookup budget exhausted'
             continue
         try:
-            profile=client.get_user_profile(entity['handle'])
+            profile=client.user_profile(entity['handle'])
             valid=(profile.get('ok') is True and str(profile.get('id','')).isdigit()
                    and str(profile.get('username','')).casefold()==key
                    and normalized(profile.get('name','')) in {normalized(n) for n in entity.get('profile_names',entity['names'])})
+            status='verified' if valid else 'identity mismatch' if profile.get('ok') is True else 'lookup failed'
         except Exception:
             valid=False
             profile={}
-        cached={'valid':valid,'names':[profile['name']] if valid else []}
+            status='lookup failed'
+        diagnostics[key]=status
+        cached={'valid':valid,'names':[profile['name']] if valid else [],'resolver_version':PROFILE_CACHE_VERSION,'status':status}
         with prepared.database() as c:
-            c.execute('INSERT OR REPLACE INTO entity_cache VALUES(?,?,?)',(key,json.dumps(cached),app.now()+(86400 if valid else 21600)))
+            c.execute('INSERT OR REPLACE INTO entity_cache VALUES(?,?,?)',(key,json.dumps(cached),app.now()+(86400 if valid else 900 if status=='lookup failed' else 21600)))
         if valid:
             result[key]=entity|{'names':list(dict.fromkeys(entity['names']+cached['names']))}
+    newsroom.state_set('identity_resolution',diagnostics)
     return list(result.values())
 
 
@@ -159,7 +177,7 @@ def replace_mentions(text,entities):
         if entity['handle'].lower()=='apple' and re.search(r'\b(?:pie|orchard|cider|fruit)\b',text,re.I) and not re.search(r'\b(?:iphone|ipad|macbook|ios|tim cook)\b',text,re.I):
             continue
         filtered.append(entity)
-    pairs=sorted([(name,'@'+e['handle']) for e in filtered for name in e['names']],key=lambda p:len(p[0]),reverse=True)
+    pairs=sorted([(name,'@'+e['handle']) for e in filtered for name in mention_names(text,e)],key=lambda p:len(p[0]),reverse=True)
     if not pairs:
         return text
     mapping={name.casefold():handle for name,handle in pairs}
@@ -309,13 +327,13 @@ def prepare(client=None):
         fmt=('text_image' if image else 'text')+('_link' if external else '')
         text=compose(row|({'outbound_url':selected_url} if selected_url else {}),entities,extra['context'],bool(selected_url))
         age=max(0,(app.now()-row['published'])/3600)
-        format_bonus={'text_image':12,'text':7,'text_link':0,'text_image_link':0}[fmt]
+        format_bonus={'text_image':12,'text':8,'text_image_link':4,'text_link':0}[fmt]
         quality=min(10,len(row['body'].split())/5)
         base=60/(1+age/6)+25*(row['priority']-1)+min(15,math.log1p(row['views']))+min(15,max(0,row['coverage']-1)*5)+quality+format_bonus
         # Urgency cannot rescue a weak item and never dominates the score.
         remaining=expires-app.now()
         urgency=min(5,max(0,1-remaining/(hours*3600))*5) if base>=35 else 0
-        reasons=dict(freshness=round(60/(1+age/6),2),source_bonus=25*(row['priority']-1),format_bonus=format_bonus,urgency=round(urgency,2),expires_in_hours=round(remaining/3600,2))
+        reasons=dict(format_tier=FORMAT_ORDER[fmt],freshness=round(60/(1+age/6),2),source_bonus=25*(row['priority']-1),format_bonus=format_bonus,urgency=round(urgency,2),expires_in_hours=round(remaining/3600,2))
         candidates.append(dict(story_id=row['id'],text=text,media_url=image,source_url=row['url'],format=fmt,rank=round(base+urgency,2),expires_at=expires,reasons=reasons,source=row['source'],event=event_key(row)))
     # Interleave sources and separate quotes from the same event before saving order.
     ordered=[]
@@ -324,7 +342,11 @@ def prepare(client=None):
     recent_sources=[r['source'] for r in reversed(previous[:2])]
     recent_events=[event_key(r) if r['body'] else '' for r in reversed(previous)]
     while candidates:
-        selected=max(candidates,key=lambda r:r['rank']-(20 if recent_sources[-2:]==[r['source']]*2 else 0)-(15 if r['event'] and r['event'] in recent_events[-5:] else 0))
+        selected=max(candidates,key=lambda r:(FORMAT_ORDER[r['format']],r['rank']-(20 if recent_sources[-2:]==[r['source']]*2 else 0)-(15 if r['event'] and r['event'] in recent_events[-5:] else 0)))
+        source_penalty=20 if recent_sources[-2:]==[selected['source']]*2 else 0
+        event_penalty=15 if selected['event'] and selected['event'] in recent_events[-5:] else 0
+        selected['reasons'].update(source_diversity_penalty=source_penalty,event_diversity_penalty=event_penalty,
+                                   selection_score=round(selected['rank']-source_penalty-event_penalty,2))
         candidates.remove(selected)
         ordered.append(selected)
         recent_sources.append(selected['source'])
@@ -334,5 +356,6 @@ def prepare(client=None):
         for position,row in enumerate(ordered):
             c.execute('INSERT INTO prepared_posts VALUES(?,?,?,?,?,?,?,?,?,?)',(row['story_id'],row['text'],row['media_url'],row['source_url'],row['format'],row['rank'],row['expires_at'],position,json.dumps(row['reasons']),app.now()))
     return {'prepared':len(ordered),'verified_handles':['@'+e['handle'] for e in entities],
+            'identity_resolution':newsroom.state_get('identity_resolution',{}),
             'top5':[dict(text=r['text'],format=r['format'],rank=r['rank'],source_url=r['source_url'],reasons=r['reasons']) for r in ordered[:5]],
             'bottom5':[dict(text=r['text'],format=r['format'],rank=r['rank'],source_url=r['source_url'],reasons=r['reasons']) for r in ordered[-5:]]}
