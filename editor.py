@@ -99,7 +99,9 @@ def _post_json(url, body, headers, timeout=75):
 # Working settings discovered at runtime (model names change; thinking options differ by model).
 _gemini_state = {'model': None, 'thinking': None, 'down': False, 'discovered': False}
 _groq_state = {'model': None}
-GEMINI_TIMEOUT = int(os.environ.get('GEMINI_TIMEOUT', '45'))
+GEMINI_TIMEOUT = int(os.environ.get('GEMINI_TIMEOUT', '30'))
+# Groq first: Gemini generation requests currently hang from GitHub runners.
+PROVIDER_ORDER = [p.strip() for p in os.environ.get('AI_PROVIDER_ORDER', 'groq,gemini').split(',') if p.strip()]
 GEMINI_THINKING = ({'thinkingLevel': 'low'}, {'thinkingBudget': 0}, None)
 
 
@@ -324,7 +326,9 @@ def edit(reports, already_posted=(), update_of=None):
     base_prompt = build_prompt(reports, already_posted, update_of)
     sources = [t for _, t in reports]
     errors = []
-    for name, provider in (('gemini', gemini), ('groq', groq)):
+    providers = {'gemini': gemini, 'groq': groq}
+    for name in [n for n in PROVIDER_ORDER if n in providers]:
+        provider = providers[name]
         prompt = base_prompt
         for attempt in range(2):
             try:
