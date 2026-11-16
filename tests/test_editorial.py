@@ -119,10 +119,16 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(scoring.score(text, self.metrics(), state_media_only=True)[0], plain)
         self.assertNotIn('source', parts)
 
-    def test_talkability_outweighs_newsworthiness_in_ai_verdict(self):
-        talky = dict(newsworthiness=5, talkability=9)
-        important_but_dull = dict(newsworthiness=9, talkability=5)
-        self.assertGreater(editor.adjustment(talky), editor.adjustment(important_but_dull)+20)
+    def test_only_predicted_virality_counts_in_ai_verdict(self):
+        self.assertEqual(editor.adjustment(dict(newsworthiness=10, talkability=5)), 0)
+        self.assertEqual(editor.adjustment(dict(newsworthiness=1, talkability=9)), 32)
+        self.assertIn('ONLY VIRALITY MATTERS', editor.SYSTEM)
+
+    def test_viral_non_political_story_is_not_penalised(self):
+        viral, category, _ = scoring.score('Nvidia shares crash 20% in record plunge after shock AI chip leak stuns Wall Street', self.metrics(4, 3, .3))
+        self.assertNotIn(category, ('politics', 'geopolitics'))
+        self.assertGreater(viral, 85)
+        self.assertTrue(scoring.breaking(viral, self.metrics(4, 3, .3), category))
 
     def test_trend_match_boosts_and_breaking_lane(self):
         m = self.metrics(6, 4, .4)
@@ -168,7 +174,7 @@ class EditorValidationTests(unittest.TestCase):
         self.assertIn('REJECTED', gemini.call_args_list[1].args[0])
         groq.assert_called_once()
         self.assertEqual(result['provider'], 'groq')
-        self.assertEqual(editor.adjustment(result), 1*3+7*4)
+        self.assertEqual(editor.adjustment(result), 8*4)
 
     def test_gemini_first_by_default_with_groq_fallback(self):
         good = json.dumps(dict(post=False, newsworthiness=2, talkability=2, text=''))

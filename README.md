@@ -1,6 +1,6 @@
 # Trending Items Poster
 
-A selective, fast X news account for **politics and geopolitics**, plus huge or political tech/business/crypto stories. It runs entirely on GitHub Actions; no server is needed.
+A fast X news account that posts whatever is most likely to go viral, with politics and geopolitics as its niche. It runs entirely on GitHub Actions; no server is needed.
 
 **[Setup guide](docs/GITHUB_SETUP.md)**: add `GEMINI_API_KEY`, preview, then set `NEWS_QUEUE_ENABLED=true`.
 
