@@ -97,7 +97,7 @@ def _post_json(url, body, headers, timeout=75):
 
 
 # Working settings discovered at runtime (model names change; thinking options differ by model).
-_gemini_state = {'model': None, 'thinking': None, 'down': False}
+_gemini_state = {'model': None, 'thinking': None, 'down': False, 'discovered': False}
 _groq_state = {'model': None}
 GEMINI_TIMEOUT = int(os.environ.get('GEMINI_TIMEOUT', '45'))
 GEMINI_THINKING = ({'thinkingLevel': 'low'}, {'thinkingBudget': 0}, None)
@@ -143,12 +143,23 @@ def gemini(prompt):
             except HTTPFailure as error:
                 if error.status == 400 and option is not None:
                     continue  # this model does not accept that thinking option
-                if error.status == 404 and len(tried) == 1:
-                    models.extend(gemini_models(key)[:3])  # configured name retired: pick a current flash model
+                if error.status == 404 and not _gemini_state['discovered']:
+                    _gemini_state['discovered'] = True
+                    models.extend([m for m in gemini_models(key) if m not in tried][:3])  # retired name: pick a current flash model
                     break
                 raise
             except EditorUnavailable:
-                # Unreachable/slow: don't spend the timeout again on every event this run.
+                # This model hangs or is unreachable: try a couple of other current flash
+                # models once, then stop spending the timeout on every event this run.
+                if not _gemini_state.get('discovered'):
+                    _gemini_state['discovered'] = True
+                    try:
+                        models.extend(m for m in gemini_models(key) if m not in tried)
+                        del models[2:]
+                    except EditorUnavailable:
+                        pass
+                if models:
+                    break
                 _gemini_state['down'] = True
                 raise
             try:
@@ -159,7 +170,21 @@ def gemini(prompt):
             _gemini_state.update(model=model, thinking=option)
             return text
         thinking = list(GEMINI_THINKING)
+    _gemini_state['down'] = True
     raise EditorUnavailable('no usable Gemini model')
+
+
+def remembered():
+    """Working provider settings to persist between scheduled runs."""
+    return {'gemini_model': _gemini_state['model'], 'gemini_thinking': _gemini_state['thinking'],
+            'groq_model': _groq_state['model']}
+
+
+def remember(value):
+    if value.get('gemini_model'):
+        _gemini_state.update(model=value['gemini_model'], thinking=value.get('gemini_thinking'))
+    if value.get('groq_model'):
+        _groq_state['model'] = value['groq_model']
 
 
 GROQ_PREFERENCES = ('llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'moonshotai/kimi-k2-instruct',

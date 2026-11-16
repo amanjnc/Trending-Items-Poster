@@ -519,6 +519,10 @@ def prepare(client=None, selected_source=None):
         discovered += discover_entities(texts)
     entities = resolve_entities(texts, discovered, client) if texts else []
     budget, day, used = ai_budget()
+    saved_models = newsroom.state_get('ai_models', {})
+    # Reuse the provider models that worked recently (re-discovered daily).
+    if app.now()-saved_models.get('saved', 0) < 86400:
+        editor.remember(saved_models)
     calls = 0
     ai_report = dict(enabled=editor.available(), calls=0, cached=0, declined=[], errors=[], budget_left=budget)
     ordered = []
@@ -579,6 +583,10 @@ def prepare(client=None, selected_source=None):
         except (ValueError, TypeError, KeyError, OverflowError) as error:
             skipped.append({'story_id': rep.get('id'), 'error_type': type(error).__name__})
     ai_report['calls'] = calls
+    working = editor.remembered()
+    if calls and any(working.values()):
+        newsroom.state_set('ai_models', dict(working, saved=app.now()))
+        ai_report['models'] = working
     ordered.sort(key=lambda r: -r['rank'])
     save_queue(ordered)
     return {'prepared': len(ordered), 'events': len(scored), 'skipped_invalid_items': skipped,
