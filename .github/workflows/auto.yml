@@ -10,6 +10,10 @@ on:
         description: 'Publish at most ONE item (off = preview only)'
         type: boolean
         default: false
+      check_ai:
+        description: 'Only test the AI keys/models (no collection, no posting)'
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
@@ -36,8 +40,10 @@ jobs:
           SOURCE_REPLY: ${{ vars.SOURCE_REPLY || 'true' }}
           TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
           LIVE: ${{ github.event_name == 'schedule' || inputs.live }}
+          CHECK_AI: ${{ inputs.check_ai }}
         shell: bash
         run: |
+          if [[ "$CHECK_AI" == "true" ]]; then exec .local/runtime/bin/python queue_worker.py --mode check-ai; fi
           args=(--mode auto)
           if [[ "$LIVE" == "true" ]]; then args+=(--live); fi
           .local/runtime/bin/python queue_worker.py "${args[@]}"

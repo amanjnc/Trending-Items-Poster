@@ -18,7 +18,7 @@ reports reported according per via live latest watch video photo photos us`'''.s
 WEAK_CAPS = set('''the a an breaking update just live watch video photos new why how what who when where this that
 these those it he she they we after amid as in on at for from by with is are was were will says said report
 monday tuesday wednesday thursday friday saturday sunday january february march april may june july august
-september october november december'''.split())
+september october november december his her their its our last yes no among also but more some'''.split())
 
 
 DEMONYMS = {'israeli': 'israel', 'iranian': 'iran', 'russian': 'russia', 'ukrainian': 'ukraine', 'chinese': 'china',

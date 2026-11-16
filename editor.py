@@ -62,49 +62,156 @@ def available():
     return bool(os.environ.get('GEMINI_API_KEY') or os.environ.get('GROQ_API_KEY'))
 
 
-def _post_json(url, body, headers, timeout=40):
-    request = urllib.request.Request(url, data=json.dumps(body).encode(), method='POST',
+def _error_detail(error):
+    """Short provider error message (e.g. 'model not found'); never headers or keys."""
+    try:
+        body = json.loads(error.read(20_000))
+        message = body.get('error', {}).get('message', '') if isinstance(body.get('error'), dict) else str(body.get('error', ''))
+    except Exception:
+        message = ''
+    message = re.sub(r'(?i)(key|token)[=:]\s*\S+', r'\1=***', message)
+    return ('HTTP %s %s' % (error.code, message[:160])).strip()
+
+
+class HTTPFailure(EditorUnavailable):
+    def __init__(self, status, detail):
+        self.status = status
+        super().__init__(detail)
+
+
+def _request(url, headers, body=None, timeout=75):
+    request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
+                                     method='POST' if body is not None else 'GET',
                                      headers={'Content-Type': 'application/json', 'User-Agent': 'TrendingItemsPoster/2.0', **headers})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read(2_000_000))
+            return json.loads(response.read(4_000_000))
     except urllib.error.HTTPError as error:
-        # Never log response bodies or headers; they can echo request data.
-        raise EditorUnavailable('HTTP %s' % error.code) from None
-    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        raise HTTPFailure(error.code, _error_detail(error)) from None
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as error:
         raise EditorUnavailable(type(error).__name__) from None
+
+
+def _post_json(url, body, headers, timeout=75):
+    return _request(url, headers, body, timeout)
+
+
+# Working settings discovered at runtime (model names change; thinking options differ by model).
+_gemini_state = {'model': None, 'thinking': None}
+_groq_state = {'model': None}
+GEMINI_THINKING = ({'thinkingLevel': 'low'}, {'thinkingBudget': 0}, None)
+
+
+def _version_key(name):
+    return [int(n) for n in re.findall(r'\d+', name)] or [0]
+
+
+def gemini_models(key):
+    data = _request('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', {'x-goog-api-key': key}, timeout=20)
+    names = [m['name'].split('/', 1)[-1] for m in data.get('models', [])
+             if 'generateContent' in m.get('supportedGenerationMethods', [])]
+    flash = [n for n in names if 'flash' in n and not re.search(r'image|tts|audio|live|exp|preview|thinking|8b', n)]
+    return sorted(flash, key=lambda n: ('lite' in n, [-v for v in _version_key(n)]))
 
 
 def gemini(prompt):
     key = os.environ.get('GEMINI_API_KEY')
     if not key:
         raise EditorUnavailable('no Gemini key')
-    url = 'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent' % GEMINI_MODEL
-    data = _post_json(url, {
-        'systemInstruction': {'parts': [{'text': SYSTEM}]},
-        'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
-        'generationConfig': {'temperature': 0.6, 'maxOutputTokens': 4096,
-                             'responseMimeType': 'application/json', 'responseSchema': SCHEMA},
-    }, {'x-goog-api-key': key})
-    try:
-        parts = data['candidates'][0]['content']['parts']
-        return ''.join(p.get('text', '') for p in parts if not p.get('thought'))
-    except (KeyError, IndexError, TypeError):
-        raise EditorUnavailable('empty Gemini response') from None
+    models = [_gemini_state['model'] or GEMINI_MODEL]
+    thinking = [_gemini_state['thinking']] if _gemini_state['model'] else list(GEMINI_THINKING)
+    tried = set()
+    while models:
+        model = models.pop(0)
+        if model in tried:
+            continue
+        tried.add(model)
+        for option in thinking:
+            config = {'temperature': 0.6, 'maxOutputTokens': 4096,
+                      'responseMimeType': 'application/json', 'responseSchema': SCHEMA}
+            if option:
+                config['thinkingConfig'] = option
+            url = 'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent' % model
+            try:
+                data = _request(url, {'x-goog-api-key': key}, {
+                    'systemInstruction': {'parts': [{'text': SYSTEM}]},
+                    'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
+                    'generationConfig': config})
+            except HTTPFailure as error:
+                if error.status == 400 and option is not None:
+                    continue  # this model does not accept that thinking option
+                if error.status == 404 and len(tried) == 1:
+                    models.extend(gemini_models(key)[:3])  # configured name retired: pick a current flash model
+                    break
+                raise
+            try:
+                parts = data['candidates'][0]['content']['parts']
+                text = ''.join(p.get('text', '') for p in parts if not p.get('thought'))
+            except (KeyError, IndexError, TypeError):
+                raise EditorUnavailable('empty Gemini response') from None
+            _gemini_state.update(model=model, thinking=option)
+            return text
+        thinking = list(GEMINI_THINKING)
+    raise EditorUnavailable('no usable Gemini model')
+
+
+GROQ_PREFERENCES = ('llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'moonshotai/kimi-k2-instruct',
+                    'meta-llama/llama-4-maverick-17b-128e-instruct', 'qwen/qwen3-32b', 'openai/gpt-oss-20b')
+
+
+def groq_models(key):
+    data = _request('https://api.groq.com/openai/v1/models', {'Authorization': 'Bearer '+key}, timeout=20)
+    names = [m['id'] for m in data.get('data', []) if m.get('active', True)]
+    names = [n for n in names if not re.search(r'whisper|guard|tts|playai|distil|compound|orpheus', n)]
+    preferred = [n for n in GROQ_PREFERENCES if n in names]
+    return preferred+[n for n in names if n not in preferred]
 
 
 def groq(prompt):
     key = os.environ.get('GROQ_API_KEY')
     if not key:
         raise EditorUnavailable('no Groq key')
-    data = _post_json('https://api.groq.com/openai/v1/chat/completions', {
-        'model': GROQ_MODEL, 'temperature': 0.6, 'response_format': {'type': 'json_object'},
-        'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': prompt}],
-    }, {'Authorization': 'Bearer '+key})
-    try:
-        return data['choices'][0]['message']['content']
-    except (KeyError, IndexError, TypeError):
-        raise EditorUnavailable('empty Groq response') from None
+    models = [_groq_state['model'] or GROQ_MODEL]
+    tried = set()
+    while models:
+        model = models.pop(0)
+        if model in tried:
+            continue
+        tried.add(model)
+        try:
+            data = _request('https://api.groq.com/openai/v1/chat/completions', {'Authorization': 'Bearer '+key}, {
+                'model': model, 'temperature': 0.6, 'response_format': {'type': 'json_object'},
+                'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': prompt}]})
+        except HTTPFailure as error:
+            if error.status in (400, 404) and len(tried) == 1:
+                models.extend(groq_models(key)[:3])  # retired or unsupported model: use a current one
+                continue
+            raise
+        try:
+            text = data['choices'][0]['message']['content']
+        except (KeyError, IndexError, TypeError):
+            raise EditorUnavailable('empty Groq response') from None
+        _groq_state['model'] = model
+        return text
+    raise EditorUnavailable('no usable Groq model')
+
+
+def check():
+    """Diagnostic: one tiny request per configured provider; reports model or error."""
+    sample = [('example', 'The Senate voted 52-48 to pass the budget bill on Monday, sending it to the House.')]
+    report = {}
+    for name, provider in (('gemini', gemini), ('groq', groq)):
+        if not os.environ.get(name.upper()+'_API_KEY'):
+            report[name] = 'no key'
+            continue
+        try:
+            result = _json(provider(build_prompt(sample)))
+            state = _gemini_state if name == 'gemini' else _groq_state
+            report[name] = dict(ok=True, model=state['model'], thinking=state.get('thinking'),
+                                sample=str(result.get('text', ''))[:200])
+        except EditorUnavailable as error:
+            report[name] = dict(ok=False, error=str(error))
+    return report
 
 
 def build_prompt(reports, already_posted=(), update_of=None):
