@@ -41,7 +41,8 @@ SET post=false when: it is an ad, promo, giveaway, opinion column, explainer, re
 
 Return JSON only:
 {"post": bool, "newsworthiness": 1-10, "talkability": 1-10, "text": "...", "reply": "optional 1-2 sentence extra context from the reports for a follow-up reply, or empty", "reason": "short reason"}
-talkability = how likely people are to reply, argue, quote or share it."""
+talkability = how likely people are to reply, argue, quote or share it. This is what matters most.
+Judge a story only by how much people will react to it; the outlet's size or reputation does not matter (accuracy rules above still apply)."""
 
 SCHEMA = {
     'type': 'OBJECT',
@@ -406,5 +407,6 @@ def tidy(text):
 
 
 def adjustment(result):
-    """How the AI verdict changes the rule score: news + talk around a neutral 5."""
-    return 3*(result['newsworthiness']-5)+4*(result['talkability']-5)
+    """How the AI verdict changes the rule score. Talkability (will people react,
+    argue, share?) dominates; newsworthiness only nudges."""
+    return 1*(result['newsworthiness']-5)+7*(result['talkability']-5)

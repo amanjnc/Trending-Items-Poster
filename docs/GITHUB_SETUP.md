@@ -53,6 +53,7 @@ Optional tuning variables (defaults in brackets):
    - talkability: conflict, firsts and records, firings and resignations, arrests, numbers and quotes. Opinion, podcasts and explainers are penalised.
    - freshness: two-hour half-life.
    - fatigue: a penalty for repeating the same people/places within a few hours.
+   - Outlet reputation or size adds or removes nothing: ranking is about how much people will react. The AI's talkability rating counts far more than its newsworthiness rating.
 4. **AI edits** the top events (max 4 new calls per tick, 250/day, verdicts cached). The model only sees the source reports. It declines minor or promotional stories and writes a hook-first post. A validator rejects drafts with links, numbers not in the sources or invented quotes. The model gets one corrective retry, then Groq is tried, then the rule-based draft is used.
 5. **Publishes** at most one post, only if it clears the quality bar and the posting gap has passed. A big, fast-spreading political story (or a huge crossover story) takes the fast lane. Posts carry no links; contested claims are attributed in the text ("Iran says…", "per Reuters").
 

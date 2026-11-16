@@ -95,11 +95,11 @@ def interest(text, category, weights=None):
 def talkability(text):
     lower = text.casefold()
     hits = len(set(re.findall(TALK, lower)))
-    score = min(16, 4*hits)
+    score = min(25, 5*hits)
     if re.search(r'[$€£]\s?\d|\d+(?:\.\d+)?\s?(?:%|percent|billion|million|trillion|bn\b)', lower):
         score += 3
     if '"' in text or '“' in text or re.search(r'^[^\n]{2,60}:\s', text):
-        score += 3  # a direct quote or "Speaker: statement" invites reactions
+        score += 4  # a direct quote or "Speaker: statement" invites reactions
     if re.search(FILLER, lower):
         score -= 25
     return score
@@ -142,16 +142,15 @@ def score(text, m, *, category_hint=None, priority=1.0, media=False, trend_terms
         talkability=talkability(text),
         freshness=freshness(m['age_hours']),
         media=4 if media else 0,
-        source=round(10*(priority-1), 2),
         fatigue=-fatigue(names, recent_posts),
     )
+    # Ranking is about engagement potential only: the outlet's reputation or
+    # priority does not add or subtract points (`priority`/`state_media_only`
+    # are accepted for compatibility but deliberately unused).
     total = sum(parts.values())
     # Crossover topics must be genuinely big to get through.
     if category in ('business', 'tech', 'crypto', 'other') and parts['heat'] < 20 and parts['interest'] < 18:
         total -= 15
-    # A claim carried only by state media needs attribution and more caution.
-    if state_media_only and m['outlets'] < 2:
-        total -= 6
     return round(total, 2), category, parts
 
 
