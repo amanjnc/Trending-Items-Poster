@@ -15,7 +15,8 @@ MIN_GAP = int(os.environ.get('MIN_GAP_MINUTES', '40'))*60
 BREAKING_GAP = int(os.environ.get('BREAKING_GAP_MINUTES', '8'))*60
 MIN_SCORE = float(os.environ.get('MIN_SCORE', '60'))
 QUIET_HOURS_UTC = os.environ.get('QUIET_HOURS_UTC', '5-10')
-SOURCE_REPLY = os.environ.get('SOURCE_REPLY', 'true').lower() != 'false'
+# Off by default: posts carry no links at all (main post or reply).
+SOURCE_REPLY = os.environ.get('SOURCE_REPLY', 'false').lower() == 'true'
 
 
 def database():

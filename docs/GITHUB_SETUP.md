@@ -36,7 +36,7 @@ Optional tuning variables (defaults in brackets):
 | `MIN_GAP_MINUTES` (40) | Normal minimum time between posts. Breaking news uses an 8-minute gap. |
 | `MIN_SCORE` (60) | Quality bar. It rises by 2 for every post beyond 8 in 24h. |
 | `QUIET_HOURS_UTC` (`5-10`) | Hours (UTC) when the bar is 15 points higher (US night). Empty to disable. |
-| `SOURCE_REPLY` (true) | Reply to each post with the source link (and extra context). |
+| `SOURCE_REPLY` (false) | Set to `true` to reply to each post with the source link (and extra context). Off by default: posts carry no links. |
 | `GEMINI_MODEL` (`gemini-3.5-flash`) | Preferred Gemini model. If it is busy (503) or over the free quota (429), `gemini-3.6-flash`, `gemini-3.5-flash-lite` and `gemini-2.5-flash` are tried, then Groq. |
 | `AI_PROVIDER_ORDER` (`gemini,groq`) | Which AI provider is tried first. |
 | `AUTO_LIKE_REPLIES` | `false` stops automatic likes on replies. |
@@ -54,7 +54,7 @@ Optional tuning variables (defaults in brackets):
    - freshness: two-hour half-life.
    - fatigue: a penalty for repeating the same people/places within a few hours.
 4. **AI edits** the top events (max 4 new calls per tick, 250/day, verdicts cached). The model only sees the source reports. It declines minor or promotional stories and writes a hook-first post. A validator rejects drafts with links, numbers not in the sources or invented quotes. The model gets one corrective retry, then Groq is tried, then the rule-based draft is used.
-5. **Publishes** at most one post, only if it clears the quality bar and the posting gap has passed. A big, fast-spreading political story (or a huge crossover story) takes the fast lane. The source link goes into a self-reply, because links in the main post reduce reach.
+5. **Publishes** at most one post, only if it clears the quality bar and the posting gap has passed. A big, fast-spreading political story (or a huge crossover story) takes the fast lane. Posts carry no links; contested claims are attributed in the text ("Iran says…", "per Reuters").
 
 An event that was already posted is not posted again from another outlet. A genuinely new development (new numbers, and at least 2 outlets in the last hour, 45+ minutes later) can be posted as a **quote of the original post**, but only when the AI confirms it is new.
 

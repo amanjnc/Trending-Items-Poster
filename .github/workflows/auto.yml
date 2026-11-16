@@ -38,7 +38,7 @@ jobs:
           MIN_GAP_MINUTES: ${{ vars.MIN_GAP_MINUTES || '40' }}
           MIN_SCORE: ${{ vars.MIN_SCORE || '60' }}
           QUIET_HOURS_UTC: ${{ vars.QUIET_HOURS_UTC || '5-10' }}
-          SOURCE_REPLY: ${{ vars.SOURCE_REPLY || 'true' }}
+          SOURCE_REPLY: ${{ vars.SOURCE_REPLY || 'false' }}
           TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
           LIVE: ${{ github.event_name == 'schedule' || inputs.live }}
           CHECK_AI: ${{ inputs.check_ai }}

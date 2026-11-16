@@ -269,6 +269,14 @@ class PacingTests(Case):
         with prepared.database() as c:
             self.assertIn('daily limit', prepared.gate(c, 1, 0))
 
+    def test_source_reply_is_off_by_default(self):
+        import importlib, os
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('SOURCE_REPLY', None)
+            module = importlib.reload(prepared)
+            self.assertFalse(module.SOURCE_REPLY)
+        importlib.reload(prepared)
+
     def test_source_reply_fits_x_limit(self):
         text = prepared.source_reply_text('word '*100, 'https://example.com/'+'a'*200)
         self.assertTrue(text.endswith('Source: https://example.com/'+'a'*200))

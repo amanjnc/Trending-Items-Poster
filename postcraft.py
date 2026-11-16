@@ -308,6 +308,8 @@ TOP_EVENTS = int(os.environ.get('TOP_EVENTS', '12'))
 AI_PER_TICK = int(os.environ.get('AI_PER_TICK', '4'))
 AI_DAILY_CALLS = int(os.environ.get('AI_DAILY_CALLS', '250'))
 X_LINK_HOSTS = ('x.com', 'www.x.com', 'twitter.com', 'www.twitter.com')
+# Posts carry no links unless explicitly enabled.
+LINKS_IN_POSTS = os.environ.get('LINKS_IN_POSTS', 'false').lower() == 'true'
 
 
 def pending_rows(selected_source=None):
@@ -359,6 +361,8 @@ def draft(row, entities, extra, tables):
             pass
     internal = next((u for u in urls if urllib.parse.urlsplit(u).hostname in X_LINK_HOSTS), None)
     selected_url = (urls[0] if urls else row['url']) if needs_link else internal
+    if not LINKS_IN_POSTS:
+        selected_url = None
     external = bool(selected_url and urllib.parse.urlsplit(selected_url).hostname not in X_LINK_HOSTS)
     fmt = (('text_video' if video else 'text_image') if image else 'text')+('_link' if external else '')
     text = compose(row | ({'outbound_url': selected_url} if selected_url else {}), entities, extra.get('context', ''), bool(selected_url))
