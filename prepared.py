@@ -10,7 +10,7 @@ import app
 import automation
 
 # Quality over volume: X suppresses accounts that flood low-engagement posts.
-DAILY_LIMIT = int(os.environ.get('DAILY_LIMIT', '20'))
+DAILY_LIMIT = int(os.environ.get('DAILY_LIMIT', '30'))
 MIN_GAP = int(os.environ.get('MIN_GAP_MINUTES', '40'))*60
 BREAKING_GAP = int(os.environ.get('BREAKING_GAP_MINUTES', '8'))*60
 MIN_SCORE = float(os.environ.get('MIN_SCORE', '60'))
@@ -51,7 +51,7 @@ def score_bar(c=None):
             posted=count(conn)
     else:
         posted=count(c)
-    bar=MIN_SCORE+2*max(0,posted-8)
+    bar=MIN_SCORE+1.5*max(0,posted-15)
     try:
         start,end=(int(v) for v in QUIET_HOURS_UTC.split('-'))
         hour=app.dt.datetime.fromtimestamp(app.now(),app.UTC).hour

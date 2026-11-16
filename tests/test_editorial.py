@@ -23,7 +23,7 @@ class Case(unittest.TestCase):
         newsroom.database().close()
         prepared.database().close()
         for key, value in dict(QUIET_HOURS_UTC='', SOURCE_REPLY=False, MIN_SCORE=60.0, MIN_GAP=2400,
-                               BREAKING_GAP=480, DAILY_LIMIT=20).items():
+                               BREAKING_GAP=480, DAILY_LIMIT=30).items():
             p = patch.object(prepared, key, value)
             p.start()
             self.addCleanup(p.stop)
@@ -241,10 +241,10 @@ class PacingTests(Case):
         self.assertIn('quality bar', prepared.publish_one(lambda: None, live=True)['publishing'])
         self.assertIn('below quality bar', prepared.publish_one(lambda: None)['publishing'])
         base = prepared.score_bar()
-        self.posted(14, 7200)
-        self.assertEqual(prepared.score_bar(), base+12)
+        self.posted(20, 7200)
+        self.assertEqual(prepared.score_bar(), base+7.5)
         with patch.object(prepared, 'QUIET_HOURS_UTC', '0-24'):
-            self.assertEqual(prepared.score_bar(), base+27)
+            self.assertEqual(prepared.score_bar(), base+22.5)
 
     def test_normal_gap_and_breaking_fast_lane(self):
         self.posted(1, 900)

@@ -34,7 +34,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash' }}
           AI_PROVIDER_ORDER: ${{ vars.AI_PROVIDER_ORDER || 'gemini,groq' }}
-          DAILY_LIMIT: ${{ vars.DAILY_LIMIT || '20' }}
+          DAILY_LIMIT: ${{ vars.DAILY_LIMIT || '30' }}
           MIN_GAP_MINUTES: ${{ vars.MIN_GAP_MINUTES || '40' }}
           MIN_SCORE: ${{ vars.MIN_SCORE || '60' }}
           QUIET_HOURS_UTC: ${{ vars.QUIET_HOURS_UTC || '5-10' }}
