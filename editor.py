@@ -30,7 +30,7 @@ WRITING RULES:
 - Line 1 is the hook: the single most surprising or consequential fact, in plain punchy words (max ~100 characters). Lead with the news, not the outlet.
 - Then 1-3 short lines with the key specifics (who, what, the number, the sharpest direct quote). Blank line between lines.
 - Optionally end with ONE short, neutral question that invites people to reply, only if it arises naturally from the story (no "What do you think?", no "Thoughts?").
-- At most one emoji, only a country flag or 🚨 for genuinely breaking, high-stakes news. No hashtags. No links. No @handles (they are added later).
+- Emoji: usually none. At most one, at the very start: a country flag, or 🚨 ONLY for breaking, high-stakes news (war, deaths, major arrests/resignations). No hashtags. No links. No @handles (they are added later).
 - Neutral and factual tone: no insults, no partisan opinion, no fake urgency, no clickbait that the facts don't support.
 - English only. Hard limit: 260 characters.
 
@@ -98,7 +98,7 @@ def _post_json(url, body, headers, timeout=75):
 
 # Working settings discovered at runtime (model names change; thinking options differ by model).
 _gemini_state = {'model': None, 'thinking': None, 'down': False, 'discovered': False}
-_groq_state = {'model': None}
+_groq_state = {'model': None, 'listed': None}
 GEMINI_TIMEOUT = int(os.environ.get('GEMINI_TIMEOUT', '30'))
 # Groq first: Gemini generation requests currently hang from GitHub runners.
 PROVIDER_ORDER = [p.strip() for p in os.environ.get('AI_PROVIDER_ORDER', 'groq,gemini').split(',') if p.strip()]
@@ -217,9 +217,15 @@ def groq(prompt):
                 'model': model, 'temperature': 0.6, 'response_format': {'type': 'json_object'},
                 'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': prompt}]})
         except HTTPFailure as error:
-            if error.status in (400, 404) and len(tried) == 1:
-                models.extend(groq_models(key)[:3])  # retired or unsupported model: use a current one
-                continue
+            if error.status in (400, 404, 429) and len(tried) <= 3:
+                # Retired/unsupported model, or this model's per-minute token limit is used
+                # up: each Groq model has its own limit, so try another current model.
+                if not _groq_state.get('listed'):
+                    _groq_state['listed'] = groq_models(key)
+                models.extend(m for m in _groq_state['listed'] if m not in tried and m not in models)
+                del models[3:]
+                if models:
+                    continue
             raise
         try:
             text = data['choices'][0]['message']['content']
@@ -256,14 +262,15 @@ def check():
 
 def build_prompt(reports, already_posted=(), update_of=None):
     lines = ['REPORTS ABOUT ONE EVENT:']
-    for i, (outlet, text) in enumerate(reports[:8], 1):
-        lines.append('[%d] %s:\n%s' % (i, outlet, text.strip()[:1200]))
+    # Kept compact: free-tier providers limit tokens per minute.
+    for i, (outlet, text) in enumerate(reports[:5], 1):
+        lines.append('[%d] %s:\n%s' % (i, outlet, text.strip()[:700]))
     if update_of:
         lines.append('\nWE ALREADY POSTED THIS EVENT AS:\n'+update_of+
                      '\nOnly post if the reports contain a genuinely NEW development; write it as an update ("Update: ...").')
     if already_posted:
         lines.append('\nALREADY POSTED RECENTLY (do not repeat):')
-        lines.extend('- '+t.replace('\n', ' ')[:200] for t in already_posted[:8])
+        lines.extend('- '+t.replace('\n', ' ')[:140] for t in already_posted[:6])
     return '\n'.join(lines)
 
 
@@ -347,6 +354,7 @@ def edit(reports, already_posted=(), update_of=None):
             except (TypeError, ValueError):
                 errors.append(name+': malformed fields')
                 break
+            result['text'] = tidy(result['text'])
             ok, why = validate(result, sources)
             if ok:
                 if result['reply'] and not validate(dict(post=True, text=result['reply']), sources)[0]:
@@ -356,6 +364,20 @@ def edit(reports, already_posted=(), update_of=None):
             # One corrective retry with the exact rejection reason.
             prompt = base_prompt+'\n\nYOUR PREVIOUS DRAFT WAS REJECTED ('+why+'):\n'+result['text']+'\nRewrite it following every rule.'
     raise EditorUnavailable('; '.join(errors) or 'no provider')
+
+
+def tidy(text):
+    """Keep at most one leading emoji (flag or 🚨); drop decorative 🚨 elsewhere."""
+    text = text.strip()
+    if text[:1] == '🚨':
+        head, rest = '🚨', text[1:]
+    elif len(text) > 1 and all(0x1F1E6 <= ord(ch) <= 0x1F1FF for ch in text[:2]):
+        head, rest = text[:2], text[2:]
+    else:
+        head, rest = '', text
+    rest = re.sub(r'[ \t]*🚨[ \t]*', ' ', rest)
+    rest = '\n'.join(line.strip() for line in rest.split('\n')).strip()
+    return (head+' '+rest) if head else rest
 
 
 def adjustment(result):
