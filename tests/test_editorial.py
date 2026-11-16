@@ -150,12 +150,16 @@ class EditorValidationTests(unittest.TestCase):
         self.assertEqual(result['provider'], 'groq')
         self.assertEqual(editor.adjustment(result), 3*3+4*4)
 
-    def test_groq_is_tried_first_by_default(self):
+    def test_gemini_first_by_default_with_groq_fallback(self):
         good = json.dumps(dict(post=False, newsworthiness=2, talkability=2, text=''))
+        self.assertEqual(editor.PROVIDER_ORDER, ['gemini', 'groq'])
         with patch.dict('os.environ', {'GEMINI_API_KEY': 'k', 'GROQ_API_KEY': 'k'}), \
-                patch('editor.gemini') as gemini, patch('editor.groq', return_value=good):
+                patch('editor.gemini', return_value=good), patch('editor.groq') as groq:
+            self.assertEqual(editor.edit([('a', 'b')])['provider'], 'gemini')
+        groq.assert_not_called()
+        with patch.dict('os.environ', {'GEMINI_API_KEY': 'k', 'GROQ_API_KEY': 'k'}), \
+                patch('editor.gemini', side_effect=editor.EditorUnavailable('HTTP 503 high demand')), patch('editor.groq', return_value=good):
             self.assertEqual(editor.edit([('a', 'b')])['provider'], 'groq')
-        gemini.assert_not_called()
 
     def test_no_key_means_unavailable(self):
         with patch.dict('os.environ', {'GEMINI_API_KEY': '', 'GROQ_API_KEY': ''}):
@@ -333,54 +337,60 @@ if __name__ == '__main__':
 
 
 class ProviderDiscoveryTests(unittest.TestCase):
-    def setUp(self):
-        editor._gemini_state.update(model=None, thinking=None, down=False, discovered=False)
-        editor._groq_state.update(model=None)
-        self.addCleanup(lambda: (editor._gemini_state.update(model=None, thinking=None, down=False, discovered=False), editor._groq_state.update(model=None, listed=None)))
+    def reset(self):
+        editor._gemini_state.update(model=None, thinking=None, down=False, discovered=False, bad=set())
+        editor._groq_state.update(model=None, listed=None)
 
-    def test_gemini_falls_back_on_thinking_option_and_retired_model(self):
-        ok = {'candidates': [{'content': {'parts': [{'text': 'thinking...', 'thought': True}, {'text': '{"post": false}'}]}}]}
-        models = {'models': [{'name': 'models/gemini-9-flash', 'supportedGenerationMethods': ['generateContent']},
-                             {'name': 'models/gemini-9-flash-image', 'supportedGenerationMethods': ['generateContent']}]}
+    def setUp(self):
+        self.reset()
+        self.addCleanup(self.reset)
+
+    OK = {'candidates': [{'content': {'parts': [{'text': 'thinking...', 'thought': True}, {'text': '{"post": false}'}]}}]}
+
+    def test_default_model_and_thinking_fallback_are_remembered(self):
         calls = []
         def request(url, headers, body=None, timeout=75):
-            calls.append((url, body and body['generationConfig'].get('thinkingConfig')))
-            if url.endswith('/models?pageSize=200'):
-                return models
-            if 'gemini-flash-latest' in url:
-                raise editor.HTTPFailure(404, 'HTTP 404 not found')
+            calls.append(url)
             if body['generationConfig'].get('thinkingConfig') == {'thinkingLevel': 'low'}:
                 raise editor.HTTPFailure(400, 'HTTP 400 thinking level unsupported')
-            return ok
+            return self.OK
         with patch.dict('os.environ', {'GEMINI_API_KEY': 'k'}), patch('editor._request', side_effect=request):
             self.assertEqual(editor.gemini('x'), '{"post": false}')
-            self.assertEqual(editor._gemini_state, {'model': 'gemini-9-flash', 'thinking': {'thinkingBudget': 0}, 'down': False, 'discovered': True})
+            self.assertEqual((editor._gemini_state['model'], editor._gemini_state['thinking']),
+                             (editor.GEMINI_MODEL, {'thinkingBudget': 0}))
             calls.clear()
             editor.gemini('y')
-        self.assertEqual(len(calls), 1)  # the working model/option is remembered
+        self.assertEqual(len(calls), 1)  # the working model/option is reused
 
-    def test_gemini_timeout_skips_gemini_for_rest_of_run(self):
-        with patch.dict('os.environ', {'GEMINI_API_KEY': 'k'}), patch('editor._request', side_effect=editor.EditorUnavailable('TimeoutError')) as request:
-            for _ in range(3):
-                with self.assertRaises(editor.EditorUnavailable):
-                    editor.gemini('x')
-        self.assertEqual(request.call_count, 2)  # one generate call + one model listing, then skipped
-
-    def test_hanging_model_switches_to_another_flash_model(self):
-        ok = {'candidates': [{'content': {'parts': [{'text': '{"post": false}'}]}}]}
+    def test_busy_or_over_quota_model_moves_to_next(self):
         def request(url, headers, body=None, timeout=75):
-            if url.endswith('/models?pageSize=200'):
-                return {'models': [{'name': 'models/gemini-3.6-flash', 'supportedGenerationMethods': ['generateContent']},
-                                   {'name': 'models/gemini-2.5-flash', 'supportedGenerationMethods': ['generateContent']}]}
-            if 'gemini-flash-latest' in url or 'gemini-3.6-flash' in url:
-                raise editor.EditorUnavailable('TimeoutError')
-            return ok
+            if 'gemini-3.5-flash:' in url:
+                raise editor.HTTPFailure(503, 'HTTP 503 high demand')
+            if 'gemini-3.6-flash:' in url:
+                raise editor.HTTPFailure(429, 'HTTP 429 quota exceeded')
+            return self.OK
         with patch.dict('os.environ', {'GEMINI_API_KEY': 'k'}), patch('editor._request', side_effect=request):
             self.assertEqual(editor.gemini('x'), '{"post": false}')
-        self.assertEqual(editor.remembered()['gemini_model'], 'gemini-2.5-flash')
-        editor._gemini_state.update(model=None, thinking=None)
-        editor.remember({'gemini_model': 'gemini-2.5-flash', 'gemini_thinking': None})
-        self.assertEqual(editor._gemini_state['model'], 'gemini-2.5-flash')
+        self.assertEqual(editor.remembered()['gemini_model'], 'gemini-3.5-flash-lite')
+        self.assertEqual(editor._gemini_state['bad'], {'gemini-3.5-flash', 'gemini-3.6-flash'})
+
+    def test_all_models_failing_skips_gemini_for_rest_of_run(self):
+        def request(url, headers, body=None, timeout=75):
+            if url.endswith('/models?pageSize=200'):
+                return {'models': [{'name': 'models/gemini-9-flash', 'supportedGenerationMethods': ['generateContent']}]}
+            raise editor.EditorUnavailable('TimeoutError')
+        with patch.dict('os.environ', {'GEMINI_API_KEY': 'k'}), patch('editor._request', side_effect=request) as mocked:
+            with self.assertRaises(editor.EditorUnavailable):
+                editor.gemini('x')
+            count = mocked.call_count
+            with self.assertRaises(editor.EditorUnavailable):
+                editor.gemini('x')
+        self.assertEqual(count, len(editor.GEMINI_FALLBACKS)+2)  # each model once, one listing, one discovered model
+        self.assertEqual(mocked.call_count, count)  # skipped afterwards
+
+    def test_remember_restores_model(self):
+        editor.remember({'gemini_model': 'gemini-3.6-flash', 'gemini_thinking': None})
+        self.assertEqual(editor._gemini_state['model'], 'gemini-3.6-flash')
 
     def test_groq_picks_current_model_after_404(self):
         def request(url, headers, body=None, timeout=75):

@@ -37,7 +37,8 @@ Optional tuning variables (defaults in brackets):
 | `MIN_SCORE` (60) | Quality bar. It rises by 2 for every post beyond 8 in 24h. |
 | `QUIET_HOURS_UTC` (`5-10`) | Hours (UTC) when the bar is 15 points higher (US night). Empty to disable. |
 | `SOURCE_REPLY` (true) | Reply to each post with the source link (and extra context). |
-| `GEMINI_MODEL` (`gemini-flash-latest`) | Gemini model name. |
+| `GEMINI_MODEL` (`gemini-3.5-flash`) | Preferred Gemini model. If it is busy (503) or over the free quota (429), `gemini-3.6-flash`, `gemini-3.5-flash-lite` and `gemini-2.5-flash` are tried, then Groq. |
+| `AI_PROVIDER_ORDER` (`gemini,groq`) | Which AI provider is tried first. |
 | `AUTO_LIKE_REPLIES` | `false` stops automatic likes on replies. |
 
 ## How it works

@@ -12,7 +12,10 @@ import unicodedata
 import urllib.error
 import urllib.request
 
-GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-flash-latest')
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.5-flash')
+# Free-tier models that answered quickly in the AI check; the newest models often
+# return 503 "high demand" or 429 "quota exceeded" on free keys.
+GEMINI_FALLBACKS = ('gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash')
 GROQ_MODEL = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
 MAX_CHARS = 270
 
@@ -100,8 +103,8 @@ def _post_json(url, body, headers, timeout=75):
 _gemini_state = {'model': None, 'thinking': None, 'down': False, 'discovered': False}
 _groq_state = {'model': None, 'listed': None}
 GEMINI_TIMEOUT = int(os.environ.get('GEMINI_TIMEOUT', '30'))
-# Groq first: Gemini generation requests currently hang from GitHub runners.
-PROVIDER_ORDER = [p.strip() for p in os.environ.get('AI_PROVIDER_ORDER', 'groq,gemini').split(',') if p.strip()]
+# Gemini first (better writing); Groq answers whenever Gemini is busy or out of quota.
+PROVIDER_ORDER = [p.strip() for p in os.environ.get('AI_PROVIDER_ORDER', 'gemini,groq').split(',') if p.strip()]
 GEMINI_THINKING = ({'thinkingLevel': 'low'}, {'thinkingBudget': 0}, None)
 
 
@@ -122,15 +125,15 @@ def gemini(prompt):
     if not key:
         raise EditorUnavailable('no Gemini key')
     if _gemini_state['down']:
-        raise EditorUnavailable('Gemini skipped after an earlier timeout in this run')
-    models = [_gemini_state['model'] or GEMINI_MODEL]
-    thinking = [_gemini_state['thinking']] if _gemini_state['model'] else list(GEMINI_THINKING)
-    tried = set()
+        raise EditorUnavailable('Gemini skipped after earlier failures in this run')
+    bad = _gemini_state.setdefault('bad', set())
+    models = [m for m in dict.fromkeys([_gemini_state['model'] or GEMINI_MODEL, GEMINI_MODEL, *GEMINI_FALLBACKS]) if m not in bad]
+    remembered_thinking = _gemini_state['thinking'] if _gemini_state['model'] else None
+    last_error = 'no usable Gemini model'
     while models:
         model = models.pop(0)
-        if model in tried:
-            continue
-        tried.add(model)
+        thinking = [remembered_thinking] if model == _gemini_state['model'] else list(GEMINI_THINKING)
+        failed = False
         for option in thinking:
             config = {'temperature': 0.6, 'maxOutputTokens': 4096,
                       'responseMimeType': 'application/json', 'responseSchema': SCHEMA}
@@ -145,25 +148,15 @@ def gemini(prompt):
             except HTTPFailure as error:
                 if error.status == 400 and option is not None:
                     continue  # this model does not accept that thinking option
-                if error.status == 404 and not _gemini_state['discovered']:
-                    _gemini_state['discovered'] = True
-                    models.extend([m for m in gemini_models(key) if m not in tried][:3])  # retired name: pick a current flash model
-                    break
-                raise
-            except EditorUnavailable:
-                # This model hangs or is unreachable: try a couple of other current flash
-                # models once, then stop spending the timeout on every event this run.
-                if not _gemini_state.get('discovered'):
-                    _gemini_state['discovered'] = True
-                    try:
-                        models.extend(m for m in gemini_models(key) if m not in tried)
-                        del models[2:]
-                    except EditorUnavailable:
-                        pass
-                if models:
-                    break
-                _gemini_state['down'] = True
-                raise
+                if error.status not in (404, 429, 500, 503):
+                    raise
+                last_error = str(error)
+                failed = True
+                break  # retired, busy or out of quota: try the next model
+            except EditorUnavailable as error:
+                last_error = str(error)
+                failed = True
+                break  # hanging/unreachable: try the next model
             try:
                 parts = data['candidates'][0]['content']['parts']
                 text = ''.join(p.get('text', '') for p in parts if not p.get('thought'))
@@ -171,9 +164,19 @@ def gemini(prompt):
                 raise EditorUnavailable('empty Gemini response') from None
             _gemini_state.update(model=model, thinking=option)
             return text
-        thinking = list(GEMINI_THINKING)
+        if failed:
+            bad.add(model)
+            if model == _gemini_state['model']:
+                _gemini_state.update(model=None, thinking=None)
+        if not models and not _gemini_state['discovered']:
+            _gemini_state['discovered'] = True
+            try:
+                models.extend([m for m in gemini_models(key) if m not in bad][:2])
+            except EditorUnavailable:
+                pass
+    # Every candidate failed: let Groq handle the rest of this run.
     _gemini_state['down'] = True
-    raise EditorUnavailable('no usable Gemini model')
+    raise EditorUnavailable(last_error)
 
 
 def remembered():
