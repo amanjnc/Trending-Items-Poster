@@ -34,5 +34,5 @@
   "trends_geo": ["US", "GB"],
   "intake_seconds": 21600,
   "telegram_pages": 2,
-  "daily_limit": 20
+  "daily_limit": 30
 }
