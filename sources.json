@@ -1,18 +1,38 @@
 {
   "telegram": [
-    {"channel": "bricsnews", "priority": 1.0},
-    {"channel": "hitech", "priority": 1.0},
-    {"channel": "hiaimediaen", "priority": 1.0},
-    {"channel": "Cointelegraph001", "priority": 1.0},
-    {"channel": "cointelegraph", "priority": 1.0},
-    {"channel": "nytimes", "priority": 1.0},
-    {"channel": "WatcherGuru", "priority": 1.0},
-    {"channel": "rtnews", "priority": 1.0},
-    {"channel": "ClashReport", "priority": 1.8},
-    {"channel": "DDGeopolitics", "priority": 1.0}
+    {"channel": "ClashReport", "priority": 1.4, "category": "geopolitics"},
+    {"channel": "DDGeopolitics", "priority": 1.2, "category": "geopolitics"},
+    {"channel": "bricsnews", "priority": 1.1, "category": "geopolitics", "state_media": true},
+    {"channel": "rtnews", "priority": 1.0, "category": "geopolitics", "state_media": true},
+    {"channel": "nytimes", "priority": 1.2, "category": "politics"},
+    {"channel": "WatcherGuru", "priority": 1.2, "category": "business"},
+    {"channel": "hitech", "priority": 1.0, "category": "tech"},
+    {"channel": "hiaimediaen", "priority": 1.0, "category": "tech"},
+    {"channel": "Cointelegraph001", "priority": 0.9, "category": "crypto"},
+    {"channel": "cointelegraph", "priority": 0.9, "category": "crypto"}
   ],
-  "rss": [{"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml", "priority": 1.0}],
-  "collection_seconds": 7200,
-  "telegram_pages": 3,
-  "daily_limit": 400
+  "rss": [
+    {"name": "Google News Top", "url": "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", "priority": 1.2, "category": "politics", "aggregator": true},
+    {"name": "Google News World", "url": "https://news.google.com/rss/headlines/section/topic/WORLD?hl=en-US&gl=US&ceid=US:en", "priority": 1.2, "category": "geopolitics", "aggregator": true},
+    {"name": "Google News US", "url": "https://news.google.com/rss/headlines/section/topic/NATION?hl=en-US&gl=US&ceid=US:en", "priority": 1.2, "category": "politics", "aggregator": true},
+    {"name": "Google News Business", "url": "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=en-US&gl=US&ceid=US:en", "priority": 1.0, "category": "business", "aggregator": true},
+    {"name": "Google News Tech", "url": "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=en-US&gl=US&ceid=US:en", "priority": 1.0, "category": "tech", "aggregator": true},
+    {"name": "BBC World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml", "priority": 1.2, "category": "geopolitics", "summary": true},
+    {"name": "Al Jazeera", "url": "https://www.aljazeera.com/xml/rss/all.xml", "priority": 1.1, "category": "geopolitics", "summary": true},
+    {"name": "The Guardian World", "url": "https://www.theguardian.com/world/rss", "priority": 1.1, "category": "geopolitics"},
+    {"name": "The Guardian US Politics", "url": "https://www.theguardian.com/us-news/us-politics/rss", "priority": 1.1, "category": "politics"},
+    {"name": "NYT Politics", "url": "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml", "priority": 1.2, "category": "politics", "summary": true},
+    {"name": "NYT World", "url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "priority": 1.1, "category": "geopolitics", "summary": true},
+    {"name": "Politico", "url": "https://rss.politico.com/politics-news.xml", "priority": 1.2, "category": "politics", "summary": true},
+    {"name": "The Hill", "url": "https://thehill.com/news/feed/", "priority": 1.1, "category": "politics"},
+    {"name": "NPR Politics", "url": "https://feeds.npr.org/1014/rss.xml", "priority": 1.0, "category": "politics", "summary": true},
+    {"name": "Fox News Politics", "url": "https://moxie.foxnews.com/google-publisher/politics.xml", "priority": 1.0, "category": "politics", "summary": true},
+    {"name": "CNBC", "url": "https://www.cnbc.com/id/100003114/device/rss/rss.html", "priority": 1.0, "category": "business", "summary": true},
+    {"name": "TechCrunch", "url": "https://techcrunch.com/feed/", "priority": 0.9, "category": "tech"},
+    {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml", "priority": 0.9, "category": "tech"}
+  ],
+  "trends_geo": ["US", "GB"],
+  "intake_seconds": 21600,
+  "telegram_pages": 2,
+  "daily_limit": 20
 }

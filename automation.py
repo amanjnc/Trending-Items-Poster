@@ -36,7 +36,7 @@ def authorization():
         raise ValueError('Session cookie is incomplete; update TWEETKIT_COOKIE securely') from None
 
 
-def send(text,image_path=None):
+def send(text,image_path=None,quote_of=None):
     client=authorization()
     if image_path:
         # Uploading media does not publish a tweet. Keep this boundary explicit so
@@ -47,7 +47,9 @@ def send(text,image_path=None):
                 raise ValueError('Media upload was not confirmed')
         except Exception:
             raise MediaUploadFailed('Media upload failed before tweet creation') from None
-        result=client.create_tweet(text,[str(media_id)])
+        result=client.create_tweet(text,[str(media_id)],quote_tweet_id=quote_of) if quote_of else client.create_tweet(text,[str(media_id)])
+    elif quote_of:
+        result=client.create_tweet(text,None,quote_tweet_id=str(quote_of))
     else:
         result=client.post(text)
     if result.get('ok') is False and result.get('status') in (400,401,403,404,422,429):
@@ -64,6 +66,15 @@ def send(text,image_path=None):
                   'media_rejected' if 'media' in detail else 'unexpected_response')
         raise PostOutcomeUncertain(result.get('status'),category)
     return str(result['id'])
+
+
+def reply(text,reply_to):
+    """Best-effort self-reply (source link/context). Never raises; returns id or None."""
+    try:
+        result=authorization().create_tweet(text,None,reply_to=str(reply_to))
+    except Exception:
+        return None
+    return str(result['id']) if result.get('ok') is True and str(result.get('id','')).isdigit() else None
 
 
 def ledger():

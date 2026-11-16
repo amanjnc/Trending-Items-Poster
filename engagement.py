@@ -103,3 +103,64 @@ def scan(checkpoint, auto_like=False):
     newsroom.state_set('reply_report',report)
     checkpoint()
     return report
+
+
+def engagement_score(row):
+    """Replies and reposts spread a post; weight them above likes."""
+    return (row.get('likes') or 0)+3*(row.get('reposts') or 0)+4*(row.get('replies') or 0)
+
+
+def track(client, limit=25, budget=40):
+    """Read public metrics of our recent posts (read-only, bounded)."""
+    import prepared
+    with prepared.database() as c:
+        posts = [r[0] for r in c.execute('''SELECT m.post_id FROM post_meta m LEFT JOIN post_metrics x ON x.post_id=m.post_id
+            WHERE m.posted>? ORDER BY COALESCE(x.checked,0),m.posted DESC LIMIT ?''', (app.now()-3*86400, limit))]
+    deadline = app.now()+budget
+    checked = errors = 0
+    for post_id in posts:
+        if app.now() >= deadline:
+            break
+        try:
+            tweet = client.get_tweet(post_id)
+            if tweet.get('ok') is not True:
+                raise RuntimeError('metrics unavailable')
+        except Exception:
+            errors += 1
+            continue
+        views = tweet.get('views')
+        with prepared.database() as c:
+            c.execute('INSERT OR REPLACE INTO post_metrics VALUES(?,?,?,?,?,?)',
+                      (post_id, tweet.get('likes') or 0, tweet.get('retweets') or 0, tweet.get('replies') or 0,
+                       int(views) if str(views or '').isdigit() else None, app.now()))
+        checked += 1
+    return dict(checked=checked, errors=errors)
+
+
+def learn(min_posts=6):
+    """Nudge category weights toward what our audience engages with (bounded 0.7-1.4)."""
+    import prepared
+    with prepared.database() as c:
+        rows = [dict(r) for r in c.execute('''SELECT m.category,m.posted,x.likes,x.reposts,x.replies,p.text
+            FROM post_meta m JOIN post_metrics x ON x.post_id=m.post_id
+            LEFT JOIN publication_payloads p ON p.story_id=m.story_id
+            WHERE m.posted BETWEEN ? AND ?''', (app.now()-14*86400, app.now()-3*3600))]
+    for row in rows:
+        row['score'] = engagement_score(row)
+    report = dict(posts=len(rows), best=[dict(score=r['score'], text=r['text'] or '') for r in sorted(rows, key=lambda r: -r['score'])[:5]])
+    if len(rows) < min_posts:
+        report['learning'] = 'waiting for more measured posts'
+        return report
+    overall = sum(r['score'] for r in rows)/len(rows) or 1
+    weights = {}
+    for category in sorted({r['category'] for r in rows if r['category']}):
+        scores = [r['score'] for r in rows if r['category'] == category]
+        if len(scores) < 3:
+            continue
+        ratio = (sum(scores)/len(scores))/overall
+        # Shrink toward 1.0 for small samples; never let one category disappear.
+        shrink = len(scores)/(len(scores)+10)
+        weights[category] = round(max(.7, min(1.4, 1+(ratio-1)*shrink)), 3)
+    newsroom.state_set('learned_weights', {'updated': app.now(), 'category': weights})
+    report['category_weights'] = weights
+    return report

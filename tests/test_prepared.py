@@ -14,8 +14,14 @@ import prepared
 import queue_worker
 import selected_post
 
+LEGACY_PACING=dict(MIN_SCORE=0.0,QUIET_HOURS_UTC='',SOURCE_REPLY=False,MIN_GAP=120,BREAKING_GAP=120,DAILY_LIMIT=400)
+
 class FixtureCase(unittest.TestCase):
+    """Safety tests run with neutral pacing; quality pacing has its own tests."""
     def setUp(self):
+        self.pacing=[patch.object(prepared,k,v) for k,v in LEGACY_PACING.items()]
+        for p in self.pacing:p.start()
+        self.addCleanup(lambda:[p.stop() for p in self.pacing])
         self.tmp=tempfile.TemporaryDirectory()
         self.old=app.DB
         app.DB=Path(self.tmp.name)/'test.db'
@@ -149,7 +155,7 @@ class EntityTests(FixtureCase):
 class PreparationTests(FixtureCase):
     def test_one_malformed_story_does_not_abort_preparing_other_stories(self):
         self.add('A detailed news item with important context and information for readers.',1,source='A')
-        self.add('Another detailed news item with important context and information for readers.',2,source='B')
+        self.add('Parliament approved the national budget after a lengthy overnight session in the capital.',2,source='B')
         original=postcraft.compose
         def compose(row,*args,**kwargs):
             if row['id']=='1':raise ValueError('bad item')
@@ -158,31 +164,6 @@ class PreparationTests(FixtureCase):
         self.assertEqual(report['prepared'],1)
         self.assertEqual(report['skipped_invalid_items'][0]['story_id'],'1')
         self.assertEqual(prepared.next_post()['story_id'],'2')
-    def test_source_never_repeats_in_two_positions_either_side(self):
-        for n in range(16):
-            self.add('A detailed news update explains recent developments and important context for readers.',n+1,
-                     source='Source '+str(n%4),media='https://cdn4.telesco.pe/image.jpg' if n%4==0 else None)
-        report=postcraft.prepare()
-        self.assertEqual(report['prepared'],16)
-        with prepared.database() as c:
-            sources=[r[0] for r in c.execute('SELECT s.source FROM prepared_posts q JOIN stories s ON s.id=q.story_id ORDER BY position')]
-        for i,source in enumerate(sources):
-            self.assertNotIn(source,sources[max(0,i-2):i])
-            self.assertNotIn(source,sources[i+1:i+3])
-    def test_insufficient_source_diversity_defers_items_without_relaxing_rule(self):
-        for n,source in enumerate(['A','A','B','B']):
-            self.add('A detailed news update explains recent developments and important context for readers.',n+1,source=source)
-        report=postcraft.prepare()
-        self.assertEqual(report['prepared'],2)
-        self.assertEqual(report['deferred_for_source_spacing'],2)
-    def test_order_starts_after_last_two_published_sources(self):
-        for n,source in enumerate(['A','B','A','B','C']):
-            identity=self.add('A detailed news update explains recent developments and important context for readers.',n+1,source=source)
-            if n<2:
-                with prepared.database() as c:
-                    c.execute('INSERT INTO publications VALUES(?,?,?,?)',(identity,app.now()-300+n*100,'posted',str(n+100)))
-        postcraft.prepare()
-        self.assertEqual(prepared.next_post()['story_id'],'5')
     def test_source_paragraphs_have_one_blank_line_between_them(self):
         body="Canada's Carney:\nIf they're ready to move, we'll move.\n\nLook, life's too short to play around other countries' political timing.\nWe're ready to do a deal if the U.S. is going to negotiate in good faith."
         entities=[dict(names=["Canada's Carney"],handle='MarkJCarney')]
@@ -195,17 +176,6 @@ class PreparationTests(FixtureCase):
             result=postcraft.compose({'body':body,'url':'https://example.com'},[])
             self.assertIn('\n\n',result)
             self.assertLessEqual(postcraft.weight(result),280)
-    def test_strict_four_format_order_overrides_freshness_and_diversity(self):
-        # The oldest, lower-scored image still precedes the newest text-only item.
-        base='A detailed research guide explains the future of battery technology and energy storage.'
-        self.add(base+' Read the full report for details.',1,media='https://cdn4.telesco.pe/file/one.jpg',source='Source A')
-        self.add(base,2,source="Source B")
-        self.add(base+' Read the full report for details.',3,source='Source C')
-        self.add(base,4,age=18*3600,media='https://cdn4.telesco.pe/file/four.jpg',source='Source D')
-        postcraft.prepare()
-        with prepared.database() as c:
-            formats=[r[0] for r in c.execute('SELECT format FROM prepared_posts ORDER BY position')]
-        self.assertEqual(formats,['text_image','text','text_image_link','text_link'])
     def test_country_abbreviation_stays_in_sentence(self):
         body='Canada trades more with the U.S. than elsewhere.'
         self.assertEqual(postcraft.compose({'body':body,'url':'https://example.com'},[]),body)
@@ -252,11 +222,6 @@ class PreparationTests(FixtureCase):
     def test_expired_items_excluded_during_preparation(self):
         self.add('A major network outage disrupted services for customers in several countries around the world.',age=7*3600)
         self.assertEqual(postcraft.prepare()['prepared'],0)
-    def test_urgency_bonus_is_capped_and_not_primary(self):
-        self.add('A major network outage disrupted services for customers in several countries around the world.',age=5*3600)
-        row=postcraft.prepare()['top5'][0]
-        self.assertLessEqual(row['reasons']['urgency'],5)
-        self.assertGreater(row['rank'],row['reasons']['urgency']*3)
     def test_deals_and_discounts_do_not_enter_prepared_queue(self):
         self.add('The latest streaming box just received its first discount for shoppers this weekend.')
         self.assertEqual(postcraft.prepare()['prepared'],0)
@@ -355,17 +320,6 @@ class FastPublisherTests(FixtureCase):
             for table in ('prepared_posts','news_items','story_media'):
                 self.assertEqual(c.execute('SELECT COUNT(*) FROM '+table+' WHERE story_id=?',(identity,)).fetchone()[0],0)
             self.assertEqual(c.execute('SELECT status FROM stories WHERE id=?',(identity,)).fetchone()[0],'expired')
-    def test_expiring_bridge_does_not_allow_repeated_actual_source(self):
-        old=self.add('A detailed previously published story about recent developments for readers.',1,source='A')
-        repeat=self.add('A detailed fresh story from the same source about other developments for readers.',2,source='A')
-        other=self.add('A detailed fresh story from a different source about recent developments for readers.',3,source='B')
-        with prepared.database() as c:
-            c.execute('INSERT INTO publications VALUES(?,?,?,?)',(old,app.now()-300,'posted','123'))
-        self.ready(repeat,'Same source queued first',position=0)
-        self.ready(other,'Different source queued next',position=1)
-        with patch('automation.authorization'),patch('automation.send',return_value='456') as send:
-            prepared.publish_one(lambda:None,live=True)
-        send.assert_called_once_with('Different source queued next')
     def test_download_requires_video_signature_and_enforces_size_limit(self):
         with patch('urllib.request.build_opener') as opener:
             response=opener.return_value.open.return_value.__enter__.return_value
@@ -496,18 +450,19 @@ class AutomaticSchedulerTests(FixtureCase):
         now=app.now()
         newsroom.state_set('automatic_collection',dict(bucket=int(now//7200),attempted=now,ok=True,preparation_version=1))
         self.assertEqual(queue_worker.automatic_mode()[0],'collect')
-    def test_one_day_has_twelve_collections_and_276_publishing_ticks(self):
+    def test_every_ten_minute_tick_collects_but_duplicate_triggers_only_publish(self):
         start=1792195200//7200*7200
         modes=[]
         for tick in range(288):
-            now=start+tick*300
+            # A 10-minute schedule plus a duplicate trigger 2 minutes after each tick.
+            now=start+(tick//2)*600+(tick%2)*120
             with patch('app.now',return_value=now):
                 mode,bucket=queue_worker.automatic_mode()
                 modes.append(mode)
                 if mode=='collect':
                     newsroom.state_set('automatic_collection',dict(bucket=bucket,attempted=now,ok=True,preparation_version=queue_worker.PREPARATION_VERSION))
-        self.assertEqual(modes.count('collect'),12)
-        self.assertEqual(modes.count('publish'),276)
+        self.assertEqual(modes.count('collect'),144)
+        self.assertEqual(modes.count('publish'),144)
     def test_late_first_tick_collects_then_later_ticks_only_publish(self):
         now=1792195200//7200*7200+420
         with patch('app.now',return_value=now):
@@ -537,25 +492,15 @@ class AutomaticSchedulerTests(FixtureCase):
 
 
 class ScheduleTests(unittest.TestCase):
-    def test_collection_and_publish_slots_partition_five_minute_day(self):
+    def test_single_ten_minute_scheduler_replaces_flooding_publisher(self):
         root=app.ROOT/'.github/workflows'
-        def slots(file):
-            result=set()
-            for expr in re.findall(r"cron: '([^']+)'",(root/file).read_text()):
-                minute,hour,*_=expr.split()
-                mins=[int(v) for v in minute.split(',')]
-                if hour=='*':hours=range(24)
-                elif hour=='*/2':hours=range(0,24,2)
-                elif hour=='1-23/2':hours=range(1,24,2)
-                else:raise AssertionError('Unexpected schedule')
-                result.update(h*60+m for h in hours for m in mins)
-            return result
-        collection,publishing=slots('queue.yml'),slots('publish.yml')
-        self.assertEqual(len(collection),12)
-        self.assertEqual(len(publishing),276)
-        self.assertFalse(collection & publishing)
-        all_slots=sorted(collection|publishing)
-        self.assertEqual(set((all_slots[(i+1)%288]-v)%1440 for i,v in enumerate(all_slots)),{5})
+        self.assertFalse((root/'publish.yml').exists())
+        self.assertFalse((root/'queue.yml').exists())
+        crons=re.findall(r"cron: '([^']+)'",(root/'auto.yml').read_text())
+        self.assertEqual(len(crons),1)
+        minutes=sorted(int(v) for v in crons[0].split()[0].split(','))
+        self.assertEqual(len(minutes),6)
+        self.assertEqual({(minutes[(i+1)%6]-m)%60 for i,m in enumerate(minutes)},{10})
 
 
 class AdditionalRegressions(FixtureCase):

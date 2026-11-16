@@ -1,5 +1,6 @@
 """Small publishing path: read a prepared row, reserve, send once, persist, exit."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import urllib.parse
@@ -7,6 +8,14 @@ import urllib.request
 
 import app
 import automation
+
+# Quality over volume: X suppresses accounts that flood low-engagement posts.
+DAILY_LIMIT = int(os.environ.get('DAILY_LIMIT', '20'))
+MIN_GAP = int(os.environ.get('MIN_GAP_MINUTES', '40'))*60
+BREAKING_GAP = int(os.environ.get('BREAKING_GAP_MINUTES', '8'))*60
+MIN_SCORE = float(os.environ.get('MIN_SCORE', '60'))
+QUIET_HOURS_UTC = os.environ.get('QUIET_HOURS_UTC', '5-10')
+SOURCE_REPLY = os.environ.get('SOURCE_REPLY', 'true').lower() != 'false'
 
 
 def database():
@@ -23,19 +32,56 @@ def database():
         CREATE TABLE IF NOT EXISTS identity_discovery (name TEXT PRIMARY KEY, value TEXT NOT NULL, expires REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS publication_payloads (story_id TEXT PRIMARY KEY,text TEXT NOT NULL,format TEXT NOT NULL,attempted REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS posting_events (story_id TEXT PRIMARY KEY,phase TEXT NOT NULL,category TEXT NOT NULL,http_status INTEGER,recorded REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS posting_backoff (category TEXT PRIMARY KEY,until_time REAL NOT NULL);''')
+        CREATE TABLE IF NOT EXISTS posting_backoff (category TEXT PRIMARY KEY,until_time REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS editor_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, created REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS post_meta (story_id TEXT PRIMARY KEY, post_id TEXT NOT NULL, category TEXT,
+        format TEXT, rank REAL, posted REAL NOT NULL, ai INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS post_metrics (post_id TEXT PRIMARY KEY, likes INTEGER, reposts INTEGER,
+        replies INTEGER, views INTEGER, checked REAL NOT NULL);''')
     return c
 
 
-def next_post(story_id=None):
+def score_bar(c=None):
+    """Minimum rank to publish. Rises as the day fills up and during quiet hours."""
+    def count(conn):
+        return conn.execute('SELECT COUNT(*) FROM publications WHERE state="posted" AND attempted>?',(app.now()-86400,)).fetchone()[0]
+    if c is None:
+        with database() as conn:
+            posted=count(conn)
+    else:
+        posted=count(c)
+    bar=MIN_SCORE+2*max(0,posted-8)
+    try:
+        start,end=(int(v) for v in QUIET_HOURS_UTC.split('-'))
+        hour=app.dt.datetime.fromtimestamp(app.now(),app.UTC).hour
+        if (start<=hour<end) if start<=end else (hour>=start or hour<end):
+            bar+=15
+    except ValueError:
+        pass
+    return bar
+
+
+def next_post(story_id=None, min_rank=None):
     with database() as c:
         row = c.execute('''SELECT q.* FROM prepared_posts q JOIN stories s ON s.id=q.story_id
             LEFT JOIN publications p ON p.story_id=q.story_id
             WHERE p.story_id IS NULL AND s.status IN ('new','approved') AND q.expires_at>? AND s.published>?
-            AND s.source NOT IN (SELECT s2.source FROM publications p2 JOIN stories s2 ON s2.id=p2.story_id
-                WHERE p2.state="posted" ORDER BY p2.attempted DESC LIMIT 2)
-            AND (? IS NULL OR q.story_id=?) ORDER BY q.position LIMIT 1''', (app.now(),app.now()-86400,story_id,story_id)).fetchone()
+            AND (? IS NULL OR q.story_id=?) AND (? IS NULL OR q.rank>=?) ORDER BY q.position LIMIT 1''',
+            (app.now(),app.now()-86400,story_id,story_id,min_rank,min_rank)).fetchone()
     return dict(row) if row else None
+
+
+def reasons_of(row):
+    try:
+        return json.loads(row.get('reasons') or '{}')
+    except ValueError:
+        return {}
+
+
+# Exact image hosts of the configured mainstream feeds (no wildcard suffixes).
+NEWS_IMAGE_HOSTS = ('ichef.bbci.co.uk','i.guim.co.uk','static01.nyt.com','www.aljazeera.com','image.cnbcfm.com',
+                    'a57.foxnews.com','static.foxnews.com','techcrunch.com','thehill.com','media.npr.org',
+                    'www.politico.com','static.politico.com')
 
 
 def media_allowed(url):
@@ -43,7 +89,7 @@ def media_allowed(url):
         p = urllib.parse.urlsplit(url)
         host = p.hostname or ''
         return p.scheme=='https' and not p.username and not p.password and p.port in (None,443) and (
-            host in ('cdn-telegram.org','telesco.pe','cdn.vox-cdn.com','www.theverge.com','platform.theverge.com') or
+            host in ('cdn-telegram.org','telesco.pe','cdn.vox-cdn.com','www.theverge.com','platform.theverge.com')+NEWS_IMAGE_HOSTS or
             host.endswith('.telesco.pe') or
             host.endswith('.cdn-telegram.org') or host.endswith('.vox-cdn.com'))
     except (ValueError, TypeError):
@@ -167,16 +213,40 @@ def expire_queue():
     return len(ids)
 
 
-def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120, story_id=None, require_media=False):
+def source_reply_text(context, url):
+    """Self-reply carrying the link (links in the main post reduce reach)."""
+    def size(text):
+        return sum(1 if ord(ch)<0x1100 else 2 for ch in text)+23  # X counts any URL as 23
+    label='Source: '
+    context=(context or '').strip()
+    while context and size(context+'\n\n'+label)>280:
+        context=context.rsplit(' ',1)[0].rstrip(',;:')+'…' if ' ' in context else ''
+    return (context+'\n\n' if context else '')+label+url
+
+
+def publish_one(checkpoint, live=False, daily_limit=None, min_gap=None, story_id=None, require_media=False):
+    daily_limit=DAILY_LIMIT if daily_limit is None else daily_limit
     expired=expire_queue()
     recovery=recover_stale_attempts() if live else {'quarantined':[],'circuit_opened':False}
     if live and (expired or recovery['quarantined'] or recovery['circuit_opened']):
         checkpoint()
-    row=next_post(story_id)
+    # An explicitly selected story bypasses the quality bar, never the safety gates.
+    bar=None if story_id else score_bar()
+    row=next_post(story_id,bar)
+    if not row and not live:
+        # Dry runs still show the best draft, flagged as below the bar.
+        best=next_post(story_id)
+        if best:
+            return {'publishing':'preview (below quality bar; would not be posted now)','draft':best['text'],'format':best['format'],
+                    'rank':best['rank'],'score_bar':bar,'expires_at':best['expires_at'],'source_url':best['source_url']}
     if not row:
-        return {'publishing':'queue empty, expired, or waiting for source diversity'}
+        return {'publishing':'nothing in the queue clears the quality bar yet','score_bar':bar}
+    reasons=reasons_of(row)
+    if min_gap is None:
+        min_gap=BREAKING_GAP if reasons.get('breaking') else MIN_GAP
     if not live:
-        return {'publishing':'preview','draft':row['text'],'format':row['format'],'rank':row['rank'],'expires_at':row['expires_at'],'source_url':row['source_url']}
+        return {'publishing':'preview','draft':row['text'],'format':row['format'],'rank':row['rank'],'score_bar':bar,
+                'breaking':bool(reasons.get('breaking')),'expires_at':row['expires_at'],'source_url':row['source_url']}
     with database() as c:
         blocked=gate(c,daily_limit,min_gap)
     if blocked:
@@ -205,7 +275,12 @@ def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120, story_id=N
             c.execute('INSERT OR REPLACE INTO publication_payloads VALUES(?,?,?,?)',(row['story_id'],row['text'],row['format'],app.now()))
         checkpoint()
         try:
-            post_id=automation.send(row['text'],image_path=image) if image else automation.send(row['text'])
+            options={}
+            if image:
+                options['image_path']=image
+            if reasons.get('quote_of'):
+                options['quote_of']=reasons['quote_of']
+            post_id=automation.send(row['text'],**options)
         except (automation.MediaUploadFailed,automation.PostingRejected) as error:
             upload=isinstance(error,automation.MediaUploadFailed)
             category='upload_failed' if upload else error.category
@@ -233,7 +308,12 @@ def publish_one(checkpoint, live=False, daily_limit=400, min_gap=120, story_id=N
             return {'publishing':'paused: posting outcome uncertain','failure_category':category,'http_status':status}
         with database() as c:
             c.execute('UPDATE publications SET state="posted",post_id=? WHERE story_id=?',(post_id,row['story_id']))
+            c.execute('INSERT OR REPLACE INTO post_meta VALUES(?,?,?,?,?,?,?)',(row['story_id'],post_id,reasons.get('category'),
+                      row['format'],row['rank'],app.now(),int(bool(reasons.get('ai')))))
         cleanup_posted()
         checkpoint()
+    reply_id=None
+    if SOURCE_REPLY and not story_id:
+        reply_id=automation.reply(source_reply_text(reasons.get('reply',''),reasons.get('source_url') or row['source_url']),post_id)
     actual_format=(('text_video' if video else 'text_image') if image else 'text')+('_link' if row['format'].endswith('_link') else '')
-    return {'publishing':'posted','post_id':post_id,'format':actual_format,'image_uploaded':bool(image) and not video,'video_uploaded':bool(image) and video,'source_url':row['source_url'],'queue_payload_removed':True}
+    return {'publishing':'posted','post_id':post_id,'source_reply_id':reply_id,'rank':row['rank'],'breaking':bool(reasons.get('breaking')),'format':actual_format,'image_uploaded':bool(image) and not video,'video_uploaded':bool(image) and video,'source_url':row['source_url'],'queue_payload_removed':True}

@@ -21,12 +21,37 @@ CONFIG = app.ROOT / 'sources.json'
 STOP = set('the a an and or to of in on for from at by with is are was were has have that this it as be its says said just breaking update'.split())
 
 
+INTAKE_SECONDS = 6*3600
+
+
 def config():
     value = json.loads(CONFIG.read_text())
     for source in value['telegram']:
         if not re.fullmatch(r'[A-Za-z0-9_]{5,32}', source['channel']):
             raise ValueError('Invalid Telegram channel in sources.json')
+    for source in value.get('rss', []):
+        if urllib.parse.urlsplit(source['url']).scheme != 'https':
+            raise ValueError('RSS sources must use HTTPS')
     return value
+
+
+def source_settings(cfg=None):
+    """Map stored source names to their configured category/priority hints."""
+    cfg = cfg or config()
+    result = {}
+    for s in cfg['telegram']:
+        result['Telegram @'+s['channel']] = s
+    for s in cfg.get('rss', []):
+        result[s['name']] = s
+    return result
+
+
+def source_setting(name, settings):
+    if name in settings:
+        return settings[name]
+    # Aggregator items are stored as "Google News Top / Publisher".
+    prefix = name.split(' / ', 1)[0]
+    return settings.get(prefix, {})
 
 
 def database():
@@ -43,7 +68,8 @@ def database():
         state TEXT NOT NULL, attempted REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS reply_scan_posts (post_id TEXT PRIMARY KEY, checked REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS story_media (story_id TEXT PRIMARY KEY, media_url TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS story_attachments (story_id TEXT PRIMARY KEY, kind TEXT NOT NULL, url TEXT);''')
+        CREATE TABLE IF NOT EXISTS story_attachments (story_id TEXT PRIMARY KEY, kind TEXT NOT NULL, url TEXT);
+        CREATE TABLE IF NOT EXISTS story_signals (story_id TEXT PRIMARY KEY, related INTEGER NOT NULL DEFAULT 0);''')
     return c
 
 
@@ -161,7 +187,7 @@ def telegram(channel, pages=3, message_id=None):
         if not ids or str(min(ids)) == before:
             break
         before = str(min(ids))
-        if rows and max(r['published'] for r in rows[-len(messages):]) < app.now()-7200:
+        if rows and max(r['published'] for r in rows[-len(messages):]) < app.now()-INTAKE_SECONDS:
             break
     return rows
 
@@ -179,7 +205,28 @@ def feed_image(entry):
     return None
 
 
-def verge(url):
+def summary_text(value, limit=420):
+    """Plain-text feed summary, bounded; HTML lists (aggregator clusters) are dropped."""
+    if not value:
+        return ''
+    soup = BeautifulSoup(value, 'html.parser')
+    if soup.find(['ol', 'ul', 'li']):
+        return ''
+    text = re.sub(r'\s+', ' ', soup.get_text(' ', strip=True)).strip()
+    if len(text) > limit:
+        cut = text[:limit]
+        text = cut[:max(cut.rfind('. ')+1, cut.rfind(' '))].strip()
+    return text
+
+
+def related_count(value):
+    """Google News descriptions list other outlets covering the same story."""
+    if not value or '<li' not in value:
+        return 0
+    return len(BeautifulSoup(value, 'html.parser').find_all('li'))
+
+
+def rss(url, name='The Verge', aggregator=False, summary=False):
     root = ET.fromstring(app.fetch(url))
     atom = '{http://www.w3.org/2005/Atom}'
     from email.utils import parsedate_to_datetime
@@ -194,7 +241,11 @@ def verge(url):
                 try:
                     date = dt.datetime.fromisoformat(stamp.replace('Z', '+00:00'))
                     if date.tzinfo is not None:
-                        rows.append(dict(title=title, url=links[0], source='The Verge', published=date.timestamp(),media_url=feed_image(entry)))
+                        body = title.strip()
+                        extra = summary_text(entry.findtext(atom+'summary')) if summary else ''
+                        if extra and extra.casefold() != body.casefold():
+                            body += '\n' + extra
+                        rows.append(dict(title=body, url=links[0], source=name, published=date.timestamp(),media_url=feed_image(entry)))
                 except ValueError:
                     continue
     else:
@@ -203,12 +254,52 @@ def verge(url):
                 date = parsedate_to_datetime(entry.findtext('pubDate') or '')
                 if date.tzinfo is None:
                     continue
-                rows.append(dict(title=entry.findtext('title'), url=entry.findtext('link'), source='The Verge', published=date.timestamp(),media_url=feed_image(entry)))
+                title = (entry.findtext('title') or '').strip()
+                link = entry.findtext('link')
+                if not title or not link:
+                    continue
+                source = name
+                description = entry.findtext('description') or ''
+                if aggregator:
+                    publisher = (entry.findtext('source') or '').strip()
+                    if publisher:
+                        # "Headline - Reuters": keep the outlet as the source, not in the text.
+                        if title.endswith(' - '+publisher):
+                            title = title[:-len(' - '+publisher)].strip()
+                        source = name+' / '+publisher
+                body = title
+                extra = summary_text(description) if summary else ''
+                if extra and extra.casefold() != title.casefold():
+                    body += '\n' + extra
+                rows.append(dict(title=body, url=link, source=source, published=date.timestamp(),
+                                 media_url=feed_image(entry), related=related_count(description) if aggregator else 0))
             except (ValueError, TypeError):
                 continue
     if not rows:
         raise ValueError('No usable RSS entries')
     return rows
+
+
+def verge(url):
+    return rss(url, 'The Verge')
+
+
+def trend_terms(geos=('US',)):
+    """Google Trends search terms with approximate traffic; a signal, never posted."""
+    terms = {}
+    ns = '{https://trends.google.com/trending/rss}'
+    for geo in geos:
+        if not re.fullmatch('[A-Z]{2}', geo):
+            continue
+        root = ET.fromstring(app.fetch('https://trends.google.com/trending/rss?geo='+geo))
+        for item in root.findall('./channel/item'):
+            term = (item.findtext('title') or '').strip()
+            raw = (item.findtext(ns+'approx_traffic') or '0').replace(',', '').replace('+', '')
+            match = re.fullmatch(r'(\d+)([KM]?)', raw.strip(), re.I)
+            traffic = int(match[1])*{'': 1, 'K': 1000, 'M': 1000000}[match[2].upper()] if match else 0
+            if term:
+                terms[term.casefold()] = max(traffic, terms.get(term.casefold(), 0))
+    return terms
 
 
 def save_attachment(c,identity,row):
@@ -219,13 +310,14 @@ def save_attachment(c,identity,row):
         c.execute('INSERT OR REPLACE INTO story_media VALUES(?,?)',(identity,row['media_url']))
 
 
-def enqueue(rows, priority, handles, window_end=None):
+def enqueue(rows, priority, handles, window_end=None, intake=None):
     window_end=app.now() if window_end is None else window_end
+    intake=INTAKE_SECONDS if intake is None else intake
     counts = dict(added=0, duplicates=0, rejected=0)
     for row in rows:
         body = clean_text(row['title'], handles)
         stamp = row['published']
-        if len(signature(body).split()) < 7 or len(body) < 45 or not window_end-7200<stamp<=window_end:
+        if len(signature(body).split()) < 7 or len(body) < 45 or not window_end-intake<stamp<=window_end+300:
             counts['rejected'] += 1
             continue
         try:
@@ -267,6 +359,8 @@ def enqueue(rows, priority, handles, window_end=None):
                       (identity,body,url,row['source'],stamp,app.now(),0))
             c.execute('INSERT INTO news_items VALUES(?,?,?,?,?)', (identity,body,fingerprint,priority,row.get('views',0)))
             c.execute('INSERT INTO observations VALUES(?,?,?)', (url,identity,row['source']))
+            if row.get('related'):
+                c.execute('INSERT OR REPLACE INTO story_signals VALUES(?,?)', (identity,int(row['related'])))
             save_attachment(c,identity,row)
             counts['added'] += 1
     return counts
@@ -275,20 +369,29 @@ def enqueue(rows, priority, handles, window_end=None):
 def collect(config_value=None):
     cfg = config_value or config()
     window_end=app.now()
+    intake=cfg.get('intake_seconds', INTAKE_SECONDS)
     handles = [s['channel'] for s in cfg['telegram']]
     report = {}
-    jobs = [('Telegram @'+s['channel'], lambda s=s: telegram(s['channel'], cfg['telegram_pages']), s['priority']) for s in cfg['telegram']]
-    jobs += [(s['name'], lambda s=s: verge(s['url']), s['priority']) for s in cfg['rss']]
+    jobs = [('Telegram @'+s['channel'], lambda s=s: telegram(s['channel'], cfg.get('telegram_pages', 2)), s['priority']) for s in cfg['telegram']]
+    jobs += [(s['name'], lambda s=s: rss(s['url'], s['name'], s.get('aggregator', False), s.get('summary', False)), s['priority']) for s in cfg.get('rss', [])]
     # Preferred sources arrive first, so syndicated duplicates use that source's wording.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         submitted = [(name,pool.submit(fn),priority) for name,fn,priority in jobs]
+        trends = pool.submit(trend_terms, tuple(cfg.get('trends_geo', ['US']))) if cfg.get('trends_geo') else None
     for name, future, priority in sorted(submitted, key=lambda j:j[2], reverse=True):
         try:
             rows = future.result()
-            report[name] = dict(received=len(rows),window_start=window_end-7200,window_end=window_end,
-                                **enqueue(rows, priority, handles,window_end=window_end))
+            report[name] = dict(received=len(rows),window_start=window_end-intake,window_end=window_end,
+                                **enqueue(rows, priority, handles,window_end=window_end,intake=intake))
         except Exception as e:
             report[name] = {'error': type(e).__name__, 'detail': 'Source unavailable or response format changed'}
+    if trends is not None:
+        try:
+            terms = trends.result()
+            state_set('trend_terms', {'fetched': app.now(), 'terms': terms})
+            report['Google Trends'] = {'terms': len(terms)}
+        except Exception as e:
+            report['Google Trends'] = {'error': type(e).__name__, 'detail': 'Trend signal unavailable'}
     state_set('last_collection', app.now())
     state_set('collection_report', report)
     return report
@@ -308,73 +411,3 @@ def queue():
         row['rank'] = round(60/(1+age/6) + 25*(row['priority']-1) + min(15, math.log1p(row['views']))
                             + min(15, max(0,row['coverage']-1)*5) - (20 if last_sources.count(row['source']) == 2 else 0), 2)
     return sorted(rows, key=lambda r:r['rank'], reverse=True)
-
-
-def render(row):
-    body = re.sub(r'https?://\S+', '', row['body'])
-    body = re.sub(r'\s+', ' ', body).strip()
-    weight = lambda text: sum(1 if ord(ch)<0x1100 else 2 for ch in text)
-    budget = 256  # 280 minus newline and X's 23-character shortened link
-    if weight(body) > budget:
-        sentences = re.split(r'(?<=[.!?])\s+', body)
-        chosen = ''
-        for sentence in sentences:
-            value = (chosen+' '+sentence).strip()
-            if weight(value)>budget:
-                break
-            chosen = value
-        if chosen:
-            body = chosen
-        else:
-            words, chosen = body.split(), ''
-            for word in words:
-                value = (chosen+' '+word).strip()
-                if weight(value+'…')>budget:
-                    break
-                chosen = value
-            body = chosen+'…'
-    return body+'\n'+row['url']
-
-
-def adaptive_interval(items, seconds_to_collection):
-    """Choose 2/3/4 minutes; sparse queues are slowed, dense queues accelerated."""
-    if items <= 0:
-        return 240
-    ideal = max(0, seconds_to_collection)/items
-    return 120 if ideal <= 120 else 180 if ideal <= 180 else 240
-
-
-def post_one(checkpoint, daily_limit=400, live=False, next_interval=240):
-    if next_interval not in (120,180,240):
-        raise ValueError("Posting interval must be 120, 180, or 240 seconds")
-    rows = queue()
-    if not rows:
-        return {'publishing': 'queue empty'}
-    row = rows[0]
-    if not live:
-        return {'publishing': 'preview', 'source': row['source'], 'rank': row['rank'], 'draft': render(row)}
-    automation.authorization()
-    with database() as c:
-        c.execute('BEGIN IMMEDIATE')
-        if c.execute('SELECT 1 FROM publications WHERE state="uncertain"').fetchone():
-            return {'publishing': 'paused: uncertain prior post'}
-        if c.execute('SELECT COUNT(*) FROM publications WHERE attempted>?', (app.now()-86400,)).fetchone()[0]>=daily_limit:
-            return {'publishing': 'daily limit reached'}
-        due = c.execute('SELECT value FROM worker_state WHERE key="next_post_at"').fetchone()
-        if due and app.now()<json.loads(due[0]):
-            return {'publishing': 'waiting for adaptive interval'}
-        last = c.execute('SELECT MAX(attempted) FROM publications').fetchone()[0]
-        if last is not None and app.now()-last < 120:
-            return {'publishing': 'waiting for minimum interval'}
-        if not c.execute('INSERT OR IGNORE INTO publications VALUES(?,?,?,NULL)', (row['id'],app.now(),'uncertain')).rowcount:
-            return {'publishing': 'already reserved'}
-        c.execute('INSERT OR REPLACE INTO worker_state VALUES(?,?)', ('next_post_at',json.dumps(app.now()+next_interval)))
-    checkpoint()
-    try:
-        post_id = automation.send(render(row))
-    except Exception:
-        return {'publishing': 'paused: posting outcome uncertain'}
-    with database() as c:
-        c.execute('UPDATE publications SET state="posted",post_id=? WHERE story_id=?', (post_id,row['id']))
-    checkpoint()
-    return {'publishing':'posted','post_id':post_id,'source':row['source'],'rank':row['rank']}
