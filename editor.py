@@ -236,6 +236,26 @@ def groq(prompt):
     raise EditorUnavailable('no usable Groq model')
 
 
+def probe_gemini(key, models):
+    """Time a minimal request (no schema, no system prompt) on each model."""
+    import time
+    results = {}
+    candidates = [m for m in models if 'omni' not in m][:4]+[m for m in models if 'lite' in m][:1]
+    for model in dict.fromkeys(candidates):
+        for label, config in (('plain', {'maxOutputTokens': 64}),
+                              ('json+schema', {'maxOutputTokens': 512, 'responseMimeType': 'application/json', 'responseSchema': SCHEMA})):
+            start = time.monotonic()
+            try:
+                _request('https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent' % model, {'x-goog-api-key': key},
+                         {'contents': [{'role': 'user', 'parts': [{'text': 'Reply with the word ok as JSON {"post": false, "newsworthiness": 1, "talkability": 1, "text": "ok"}.'}]}],
+                          'generationConfig': config}, timeout=60)
+                outcome = 'ok'
+            except EditorUnavailable as error:
+                outcome = str(error)[:120]
+            results['%s %s' % (model, label)] = '%s in %.1fs' % (outcome, time.monotonic()-start)
+    return results
+
+
 def check():
     """Diagnostic: one tiny request per configured provider; reports model or error."""
     sample = [('example', 'The Senate voted 52-48 to pass the budget bill on Monday, sending it to the House.')]
@@ -254,7 +274,9 @@ def check():
             if name == 'gemini':
                 # Distinguish "Google unreachable" from "this model is slow/hanging".
                 try:
-                    report[name]['available_flash_models'] = gemini_models(os.environ['GEMINI_API_KEY'])[:6]
+                    models = gemini_models(os.environ['GEMINI_API_KEY'])
+                    report[name]['available_flash_models'] = models[:6]
+                    report[name]['probe'] = probe_gemini(os.environ['GEMINI_API_KEY'], models)
                 except EditorUnavailable as listing:
                     report[name]['model_listing_error'] = str(listing)
     return report
