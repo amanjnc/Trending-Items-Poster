@@ -1,9 +1,13 @@
 name: Automatic news scheduler
 on:
+  schedule:
+    # Every 10 minutes: collect fresh news, score it, AI-edit the best and publish
+    # only when something clears the quality bar and the pacing allows it.
+    - cron: '3,13,23,33,43,53 * * * *'
   workflow_dispatch:
     inputs:
       live:
-        description: 'Publish ONE item (off = preview)'
+        description: 'Publish at most ONE item (off = preview only)'
         type: boolean
         default: false
 permissions:
@@ -13,16 +17,25 @@ concurrency:
   cancel-in-progress: false
 jobs:
   tick:
+    if: github.event_name == 'workflow_dispatch' || vars.NEWS_QUEUE_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/python-runtime
-      - name: Collect when due or publish one prepared item, then exit
+      - name: Collect, score, edit and maybe publish one post, then exit
         env:
           TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-flash-latest' }}
+          DAILY_LIMIT: ${{ vars.DAILY_LIMIT || '20' }}
+          MIN_GAP_MINUTES: ${{ vars.MIN_GAP_MINUTES || '40' }}
+          MIN_SCORE: ${{ vars.MIN_SCORE || '60' }}
+          QUIET_HOURS_UTC: ${{ vars.QUIET_HOURS_UTC || '5-10' }}
+          SOURCE_REPLY: ${{ vars.SOURCE_REPLY || 'true' }}
           TRENDING_DB: ${{ github.workspace }}/.local/actions/stories.db
-          LIVE: ${{ inputs.live }}
+          LIVE: ${{ github.event_name == 'schedule' || inputs.live }}
         shell: bash
         run: |
           args=(--mode auto)
