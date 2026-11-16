@@ -14,7 +14,7 @@ collect  →  cluster into events  →  score  →  AI edit top events  →  pub
 - **Cluster** (`events.py`): merges reports of the same story from different outlets, and measures how many outlets carry it and how many joined in the last hour.
 - **Score** (`scoring.py`): heat + interest + talkability + freshness + media − fatigue. Every part is saved in the report, so you can see why something was or wasn't chosen.
 - **AI edit** (`editor.py`): Gemini (free tier) with optional Groq fallback decides whether a story is worth posting and writes a hook-first post from the source reports only. A validator rejects links, numbers that aren't in the sources and invented quotes. Without a key, it falls back to rule-based wording.
-- **Publish** (`prepared.py`): default limit of 20 posts a day, a 40-minute gap, and a quality bar that rises as the day fills up and during US night hours. Breaking stories take a fast lane. The source link goes in a self-reply. A material update to an already-posted story becomes a quote of the original.
+- **Publish** (`prepared.py`): default limit of 20 posts a day, a 40-minute gap, and a quality bar that rises as the day fills up and during US night hours. Breaking stories take a fast lane. Posts carry no links (an optional source-link reply can be enabled with `SOURCE_REPLY=true`). A material update to an already-posted story becomes a quote of the original.
 - **Learn** (`engagement.py`, hourly): likes direct replies, reads the bot's own post metrics, and nudges topic weights toward what gets engagement.
 
 Posting safety is unchanged. The reservation is saved before X is contacted, uncertain sends are never retried, and cooldowns and circuit breakers stay in place. Pending items expire within 24 hours.

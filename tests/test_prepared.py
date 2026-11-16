@@ -199,9 +199,17 @@ class PreparationTests(FixtureCase):
     def test_link_format_is_ranked_below_equivalent_link_free_post(self):
         self.add('A new research report explains battery technology and its role in the future of electric vehicles.',1)
         self.add('A new research report explains battery technology. Read the full report for detailed results.',2,source='Source B')
-        report=postcraft.prepare()
+        with patch.object(postcraft,'LINKS_IN_POSTS',True):
+            report=postcraft.prepare()
         formats={r['format']:r['rank'] for r in report['top5']}
         self.assertGreater(formats['text'],formats['text_link'])
+    def test_posts_carry_no_links_by_default(self):
+        self.add('A new research report explains battery technology. Read the full report https://example.com/report for detailed results.',1)
+        self.add('An important research announcement has additional context in this post https://x.com/example/status/123',2,source='Source B')
+        report=postcraft.prepare()
+        for row in report['top5']:
+            self.assertNotIn('http',row['text'])
+            self.assertFalse(row['format'].endswith('_link'))
     def test_time_bound_outage_expired_but_evergreen_not(self):
         now=app.now()
         outage=dict(body='A major network outage disrupted services.',published=now-7*3600)
@@ -543,7 +551,8 @@ class AdditionalRegressions(FixtureCase):
         self.assertEqual(row['media_url'],'https://cdn4.cdn-telegram.org/file/image.jpg')
     def test_internal_x_link_does_not_receive_outbound_penalty(self):
         self.add('An important research announcement has additional context in this post https://x.com/example/status/123',1)
-        report=postcraft.prepare()
+        with patch.object(postcraft,'LINKS_IN_POSTS',True):
+            report=postcraft.prepare()
         self.assertEqual(report['top5'][0]['format'],'text')
         self.assertIn('https://x.com/example/status/123',report['top5'][0]['text'])
     def test_known_image_is_passed_to_tweetkit(self):
