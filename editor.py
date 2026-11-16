@@ -38,12 +38,14 @@ STYLE RULES:
 - Let the facts carry the drama: no insults, no made-up urgency, no claims the reports don't support.
 - English only. Hard limit: 260 characters.
 
-SET post=false when: it is an ad, promo, giveaway, opinion column, explainer, review, minor/local or routine news, too vague to state clearly, graphic gore, or it repeats something listed under ALREADY POSTED without a genuinely new development.
+ONLY VIRALITY MATTERS. Predict how much this post would spread on X: replies, quote-posts, reposts, likes and views.
+SET post=false only when: it is an ad, promo or giveaway, too vague to state clearly, graphic gore, it repeats something listed under ALREADY POSTED without a genuinely new development, or it would get almost no reaction (virality 3 or lower).
 
 Return JSON only:
 {"post": bool, "newsworthiness": 1-10, "talkability": 1-10, "text": "...", "reply": "optional 1-2 sentence extra context from the reports for a follow-up reply, or empty", "reason": "short reason"}
-talkability = how likely people are to reply, argue, quote or share it. This is what matters most.
-Judge a story only by how much people will react to it; the outlet's size or reputation does not matter (fact rules above still apply)."""
+talkability = predicted VIRALITY of your post (1 = nobody reacts, 10 = it blows up). This is the only score that is used.
+newsworthiness = ignored; give the same number as talkability.
+Judge a story only by how viral it can go; how important, serious or reputable it is does not matter (fact rules above still apply)."""
 
 SCHEMA = {
     'type': 'OBJECT',
@@ -416,6 +418,6 @@ def tidy(text):
 
 
 def adjustment(result):
-    """How the AI verdict changes the rule score. Talkability (will people react,
-    argue, share?) dominates; newsworthiness only nudges."""
-    return 1*(result['newsworthiness']-5)+7*(result['talkability']-5)
+    """How the AI verdict changes the rule score: only predicted virality counts
+    (the `talkability` field); newsworthiness is ignored."""
+    return 8*(result['talkability']-5)

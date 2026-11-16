@@ -9,7 +9,7 @@ loop (engagement.learn) can scale category weights within fixed bounds.
 import math
 import re
 
-# Topic lexicons. Politics/geopolitics is the account's focus; others are crossover.
+# Topic lexicons. Only virality matters; politics/geopolitics keeps a small edge as the account's niche.
 TOPICS = {
     'geopolitics': r'\b(?:war|ceasefire|truce|missiles?|drones?|airstrikes?|strikes? on|troops|military|army|navy|nato|un security council|'
                    r'invasion|offensive|nuclear|sanctions?|embassy|diplomat\w*|foreign minister|summit|border|hostages?|'
@@ -29,7 +29,7 @@ TOPICS = {
             r'meta\b|nvidia|tesla|spacex|starlink|x\.com|twitter|tiktok|chips?|semiconductors?|tsmc|robot\w*|data center)\b',
     'crypto': r'\b(?:bitcoin|btc|ethereum|eth\b|crypto\w*|stablecoins?|solana|xrp|binance|coinbase|blockchain)\b',
 }
-BASE_INTEREST = {'politics': 22, 'geopolitics': 22, 'business': 8, 'tech': 8, 'crypto': 6, 'other': 0}
+BASE_INTEREST = {'politics': 18, 'geopolitics': 18, 'business': 13, 'tech': 14, 'crypto': 12, 'other': 8}
 # A crossover story becomes "political" when power, law or states are involved.
 POLITICAL_ANGLE = (r'\b(?:ban\w*|sanction\w*|tariffs?|export controls?|regulat\w*|antitrust|lawsuit|sues?|sued|congress|senate|'
                    r'white house|trump|government|lawmakers?|national security|china|beijing|eu\b|european commission|'
@@ -46,7 +46,7 @@ TALK = (r'\b(?:breaking|first[- ]ever|historic|record|shock\w*|stun\w*|slams?|bl
         r'shut(?:s|ting)? down|pardon\w*|deport\w*|tariffs?|nuclear|war\b|ceasefire|coup|emergency|unprecedented|'
         r'biggest|largest|worst|never before|for the first time)\b')
 FILLER = (r'\b(?:podcast|newsletter|quiz|crossword|horoscope|recipe|review:|hands[- ]on|deal of the day|best \w+ to buy|'
-          r'how to watch|livestream|opinion|op-ed|analysis:|explainer|sponsored|giveaway|airdrop|presale)\b')
+          r'how to watch|livestream|sponsored|giveaway|airdrop|presale)\b')
 
 
 def topic_hits(text):
@@ -87,7 +87,7 @@ def interest(text, category, weights=None):
         base *= .4  # Only the channel's usual topic, nothing in the story itself.
     lower = text.casefold()
     if category in ('business', 'tech', 'crypto') and re.search(POLITICAL_ANGLE, lower):
-        base += 10
+        base += 5  # power/law/state fights get people arguing
     names = len(set(re.findall(BIG_NAMES, lower)))
     return round(base+min(14, 7*names), 2)
 
@@ -148,17 +148,11 @@ def score(text, m, *, category_hint=None, priority=1.0, media=False, trend_terms
     # priority does not add or subtract points (`priority`/`state_media_only`
     # are accepted for compatibility but deliberately unused).
     total = sum(parts.values())
-    # Crossover topics must be genuinely big to get through.
-    if category in ('business', 'tech', 'crypto', 'other') and parts['heat'] < 20 and parts['interest'] < 18:
-        total -= 15
     return round(total, 2), category, parts
 
 
 def breaking(total, m, category):
-    """Fast lane: big, fast-moving, on-topic stories skip the normal posting gap."""
+    """Fast lane: anything blowing up right now (many outlets, fast) skips the normal gap."""
     if m['age_hours'] >= 2:
         return False
-    if category in ('politics', 'geopolitics'):
-        return total >= 85 and (m['outlets'] >= 4 or m['outlets_last_hour'] >= 3)
-    # Crossover stories only when everyone is covering them at once.
-    return total >= 100 and m['outlets'] >= 4 and m['outlets_last_hour'] >= 3
+    return total >= 85 and (m['outlets'] >= 4 or m['outlets_last_hour'] >= 3)
