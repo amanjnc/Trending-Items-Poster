@@ -336,7 +336,7 @@ class ProviderDiscoveryTests(unittest.TestCase):
     def setUp(self):
         editor._gemini_state.update(model=None, thinking=None, down=False, discovered=False)
         editor._groq_state.update(model=None)
-        self.addCleanup(lambda: (editor._gemini_state.update(model=None, thinking=None, down=False, discovered=False), editor._groq_state.update(model=None)))
+        self.addCleanup(lambda: (editor._gemini_state.update(model=None, thinking=None, down=False, discovered=False), editor._groq_state.update(model=None, listed=None)))
 
     def test_gemini_falls_back_on_thinking_option_and_retired_model(self):
         ok = {'candidates': [{'content': {'parts': [{'text': 'thinking...', 'thought': True}, {'text': '{"post": false}'}]}}]}
@@ -401,3 +401,23 @@ class ProviderDiscoveryTests(unittest.TestCase):
             self.assertEqual(postcraft.cached_edit('k'), {'error': 'timeout'})
             with patch('app.now', return_value=app.now()+1900):
                 self.assertIsNone(postcraft.cached_edit('k'))
+
+
+class TidyAndRateLimitTests(unittest.TestCase):
+    def test_alarm_emoji_only_kept_at_start(self):
+        self.assertEqual(editor.tidy('Macron speaks 🚨\nHe called for aid.'), 'Macron speaks\nHe called for aid.')
+        self.assertEqual(editor.tidy('🚨 Russia strikes Kyiv\n\nAt least 3 killed.'), '🚨 Russia strikes Kyiv\n\nAt least 3 killed.')
+        self.assertEqual(editor.tidy('🇺🇸 Senate passes bill 🚨'), '🇺🇸 Senate passes bill')
+
+    def test_groq_rate_limit_moves_to_another_model(self):
+        editor._groq_state.update(model='openai/gpt-oss-120b', listed=None)
+        self.addCleanup(lambda: editor._groq_state.update(model=None, listed=None))
+        def request(url, headers, body=None, timeout=75):
+            if url.endswith('/models'):
+                return {'data': [{'id': 'openai/gpt-oss-120b'}, {'id': 'llama-3.3-70b-versatile'}]}
+            if body['model'] == 'openai/gpt-oss-120b':
+                raise editor.HTTPFailure(429, 'HTTP 429 Rate limit reached')
+            return {'choices': [{'message': {'content': '{"post": false}'}}]}
+        with patch.dict('os.environ', {'GROQ_API_KEY': 'k'}), patch('editor._request', side_effect=request):
+            self.assertEqual(editor.groq('x'), '{"post": false}')
+        self.assertEqual(editor._groq_state['model'], 'llama-3.3-70b-versatile')
