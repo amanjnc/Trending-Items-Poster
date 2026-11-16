@@ -392,8 +392,14 @@ def ai_record(day, used):
 
 def cached_edit(key):
     with prepared.database() as c:
-        row = c.execute('SELECT value FROM editor_cache WHERE key=? AND created>?', (key, app.now()-6*3600)).fetchone()
-    return json.loads(row[0]) if row else None
+        row = c.execute('SELECT value,created FROM editor_cache WHERE key=? AND created>?', (key, app.now()-6*3600)).fetchone()
+    if not row:
+        return None
+    value = json.loads(row[0])
+    # Provider failures are retried after 30 minutes; real verdicts last 6 hours.
+    if 'error' in value and row[1] < app.now()-1800:
+        return None
+    return value
 
 
 def save_edit(key, value):

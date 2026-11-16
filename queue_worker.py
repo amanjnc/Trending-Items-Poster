@@ -119,10 +119,17 @@ def write_editorial_summary(output,report):
 def main():
     started=time.monotonic()
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--mode',choices=['auto','collect','publish','replies'],default='collect')
+    p.add_argument('--mode',choices=['auto','collect','publish','replies','check-ai'],default='collect')
     p.add_argument('--live',action='store_true')
     p.add_argument('--auto-like',action='store_true')
     args=p.parse_args()
+    if args.mode=='check-ai':
+        import editor
+        report={'ai_check':editor.check()}
+        print(json.dumps(report,indent=2),flush=True)
+        if not any(isinstance(v,dict) and v.get('ok') for v in report['ai_check'].values()):
+            raise SystemExit(1)
+        return
     state=GitState(app.ROOT)
     report=run(state,args.mode,args.live,args.auto_like)
     report['state_and_task_seconds']=round(time.monotonic()-started,3)

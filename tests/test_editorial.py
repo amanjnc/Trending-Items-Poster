@@ -323,3 +323,51 @@ class FeedTests(Case):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProviderDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        editor._gemini_state.update(model=None, thinking=None)
+        editor._groq_state.update(model=None)
+        self.addCleanup(lambda: (editor._gemini_state.update(model=None, thinking=None), editor._groq_state.update(model=None)))
+
+    def test_gemini_falls_back_on_thinking_option_and_retired_model(self):
+        ok = {'candidates': [{'content': {'parts': [{'text': 'thinking...', 'thought': True}, {'text': '{"post": false}'}]}}]}
+        models = {'models': [{'name': 'models/gemini-9-flash', 'supportedGenerationMethods': ['generateContent']},
+                             {'name': 'models/gemini-9-flash-image', 'supportedGenerationMethods': ['generateContent']}]}
+        calls = []
+        def request(url, headers, body=None, timeout=75):
+            calls.append((url, body and body['generationConfig'].get('thinkingConfig')))
+            if url.endswith('/models?pageSize=200'):
+                return models
+            if 'gemini-flash-latest' in url:
+                raise editor.HTTPFailure(404, 'HTTP 404 not found')
+            if body['generationConfig'].get('thinkingConfig') == {'thinkingLevel': 'low'}:
+                raise editor.HTTPFailure(400, 'HTTP 400 thinking level unsupported')
+            return ok
+        with patch.dict('os.environ', {'GEMINI_API_KEY': 'k'}), patch('editor._request', side_effect=request):
+            self.assertEqual(editor.gemini('x'), '{"post": false}')
+            self.assertEqual(editor._gemini_state, {'model': 'gemini-9-flash', 'thinking': {'thinkingBudget': 0}})
+            calls.clear()
+            editor.gemini('y')
+        self.assertEqual(len(calls), 1)  # the working model/option is remembered
+
+    def test_groq_picks_current_model_after_404(self):
+        def request(url, headers, body=None, timeout=75):
+            if url.endswith('/models'):
+                return {'data': [{'id': 'whisper-large-v3'}, {'id': 'openai/gpt-oss-120b'}]}
+            if body['model'] == editor.GROQ_MODEL:
+                raise editor.HTTPFailure(404, 'HTTP 404 model decommissioned')
+            return {'choices': [{'message': {'content': '{"post": false}'}}]}
+        with patch.dict('os.environ', {'GROQ_API_KEY': 'k'}), patch('editor._request', side_effect=request):
+            self.assertEqual(editor.groq('x'), '{"post": false}')
+        self.assertEqual(editor._groq_state['model'], 'openai/gpt-oss-120b')
+
+    def test_provider_errors_retry_after_thirty_minutes(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with patch.object(app, 'DB', Path(tmp.name)/'t.db'):
+            postcraft.save_edit('k', {'error': 'timeout'})
+            self.assertEqual(postcraft.cached_edit('k'), {'error': 'timeout'})
+            with patch('app.now', return_value=app.now()+1900):
+                self.assertIsNone(postcraft.cached_edit('k'))
