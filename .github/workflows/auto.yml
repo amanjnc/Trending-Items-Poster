@@ -32,8 +32,8 @@ jobs:
           TWEETKIT_COOKIE: ${{ secrets.TWEETKIT_COOKIE }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-flash-latest' }}
-          AI_PROVIDER_ORDER: ${{ vars.AI_PROVIDER_ORDER || 'groq,gemini' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash' }}
+          AI_PROVIDER_ORDER: ${{ vars.AI_PROVIDER_ORDER || 'gemini,groq' }}
           DAILY_LIMIT: ${{ vars.DAILY_LIMIT || '20' }}
           MIN_GAP_MINUTES: ${{ vars.MIN_GAP_MINUTES || '40' }}
           MIN_SCORE: ${{ vars.MIN_SCORE || '60' }}
