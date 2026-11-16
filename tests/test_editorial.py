@@ -112,6 +112,18 @@ class ScoringTests(unittest.TestCase):
         self.assertLess(tired, base)
         self.assertLess(parts['fatigue'], 0)
 
+    def test_outlet_reputation_does_not_change_score(self):
+        text = 'Iran says it seized a tanker in the Strait of Hormuz, accusing it of smuggling'
+        plain, _, parts = scoring.score(text, self.metrics())
+        self.assertEqual(scoring.score(text, self.metrics(), priority=1.8)[0], plain)
+        self.assertEqual(scoring.score(text, self.metrics(), state_media_only=True)[0], plain)
+        self.assertNotIn('source', parts)
+
+    def test_talkability_outweighs_newsworthiness_in_ai_verdict(self):
+        talky = dict(newsworthiness=5, talkability=9)
+        important_but_dull = dict(newsworthiness=9, talkability=5)
+        self.assertGreater(editor.adjustment(talky), editor.adjustment(important_but_dull)+20)
+
     def test_trend_match_boosts_and_breaking_lane(self):
         m = self.metrics(6, 4, .4)
         plain, cat, _ = scoring.score('Israel and Hamas agree ceasefire deal in Gaza, hostages to be released', m)
@@ -148,7 +160,7 @@ class EditorValidationTests(unittest.TestCase):
         self.assertIn('REJECTED', gemini.call_args_list[1].args[0])
         groq.assert_called_once()
         self.assertEqual(result['provider'], 'groq')
-        self.assertEqual(editor.adjustment(result), 3*3+4*4)
+        self.assertEqual(editor.adjustment(result), 1*3+7*4)
 
     def test_gemini_first_by_default_with_groq_fallback(self):
         good = json.dumps(dict(post=False, newsworthiness=2, talkability=2, text=''))
