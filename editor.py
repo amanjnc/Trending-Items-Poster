@@ -23,18 +23,19 @@ SYSTEM = """You are the editor of a fast X (Twitter) news account focused on pol
 
 You receive reports from several outlets about ONE news event. Decide whether it deserves a post and write it.
 
-ACCURACY RULES (never break these):
+FACT RULES (never break these):
 - Use only facts stated in the reports. Never add numbers, names, dates, motives, predictions or context that the reports do not contain.
 - Quotes must be copied exactly from a report. Do not invent or paraphrase inside quotation marks.
-- If only state media (RT, BRICS News) or a single channel reports a claim, attribute it ("Russian state media says...", "per Reuters", "Iran says...").
-- Keep uncertainty: "reportedly", "claims", "says" stay when the source uses them.
 
-WRITING RULES:
-- Line 1 is the hook: the single most surprising or consequential fact, in plain punchy words (max ~100 characters). Lead with the news, not the outlet.
-- Then 1-3 short lines with the key specifics (who, what, the number, the sharpest direct quote). Blank line between lines.
-- Optionally end with ONE short, neutral question that invites people to reply, only if it arises naturally from the story (no "What do you think?", no "Thoughts?").
-- Emoji: usually none. At most one, at the very start: a country flag, or 🚨 ONLY for breaking, high-stakes news (war, deaths, major arrests/resignations). No hashtags. No links. No @handles (they are added later).
-- Neutral and factual tone: no insults, no partisan opinion, no fake urgency, no clickbait that the facts don't support.
+STYLE RULES:
+- Write like the most-followed breaking-news accounts on X: bold, direct, conversational, punchy. Just state the news.
+- NO journalistic jargon or sourcing talk: never write "state media", "state-run", "according to", "reportedly", "sources say", "per Reuters", "media reports" or name any news outlet.
+- When something is a person's or government's statement, put it in their mouth naturally: "Putin: ..." or "Iran says it seized ...". No hedging beyond that.
+- Line 1 is the hook: the single most surprising, dramatic or controversial fact, in plain words (max ~100 characters).
+- Then 1-3 short lines with the juiciest specifics (who, what, the number, the sharpest direct quote). Blank line between lines.
+- Optionally end with ONE short, sharp question that makes people want to reply or argue, only if it fits naturally (no "What do you think?", no "Thoughts?").
+- Emoji: usually none. At most one, at the very start: a country flag, or 🚨 only for big breaking news (war, deaths, major arrests/resignations). No hashtags. No links. No @handles (they are added later).
+- Let the facts carry the drama: no insults, no made-up urgency, no claims the reports don't support.
 - English only. Hard limit: 260 characters.
 
 SET post=false when: it is an ad, promo, giveaway, opinion column, explainer, review, minor/local or routine news, too vague to state clearly, graphic gore, or it repeats something listed under ALREADY POSTED without a genuinely new development.
@@ -42,7 +43,7 @@ SET post=false when: it is an ad, promo, giveaway, opinion column, explainer, re
 Return JSON only:
 {"post": bool, "newsworthiness": 1-10, "talkability": 1-10, "text": "...", "reply": "optional 1-2 sentence extra context from the reports for a follow-up reply, or empty", "reason": "short reason"}
 talkability = how likely people are to reply, argue, quote or share it. This is what matters most.
-Judge a story only by how much people will react to it; the outlet's size or reputation does not matter (accuracy rules above still apply)."""
+Judge a story only by how much people will react to it; the outlet's size or reputation does not matter (fact rules above still apply)."""
 
 SCHEMA = {
     'type': 'OBJECT',
@@ -326,6 +327,12 @@ def _numbers(text):
     return {n.replace(',', '') for n in re.findall(r'\d[\d,]*(?:\.\d+)?', text)}
 
 
+JARGON = (r'\b(?:state[- ](?:media|run|owned media|TV)|according to|reportedly|sources say|sources said|'
+          r'media reports?|news agency|per (?:the )?[A-Z]\w+)\b')
+OUTLETS = (r'\b(?:Reuters|AP News|Associated Press|AFP|BBC|CNN|Fox News|NYT|New York Times|Al Jazeera|Bloomberg|CNBC|'
+           r'Politico|The Hill|NPR|Guardian|TASS|RIA Novosti|RT|Sputnik|BRICS News|ClashReport|WatcherGuru|Telegram)\b')
+
+
 def validate(result, sources):
     """Return (ok, reason). Conservative: reject anything not grounded in sources."""
     text = (result.get('text') or '').strip()
@@ -339,6 +346,8 @@ def validate(result, sources):
         return False, 'contains handle'
     if len(re.findall(r'#\w', text)) > 1:
         return False, 'hashtags'
+    if re.search(JARGON, text, re.I) or re.search(OUTLETS, text):
+        return False, 'sourcing jargon (state the news directly, no outlets or "according to")'
     if weight(text) > MAX_CHARS:
         return False, 'too long'
     source_text = _norm(' '.join(sources))

@@ -55,7 +55,7 @@ Optional tuning variables (defaults in brackets):
    - fatigue: a penalty for repeating the same people/places within a few hours.
    - Outlet reputation or size adds or removes nothing: ranking is about how much people will react. The AI's talkability rating counts far more than its newsworthiness rating.
 4. **AI edits** the top events (max 4 new calls per tick, 250/day, verdicts cached). The model only sees the source reports. It declines minor or promotional stories and writes a hook-first post. A validator rejects drafts with links, numbers not in the sources or invented quotes. The model gets one corrective retry, then Groq is tried, then the rule-based draft is used.
-5. **Publishes** at most one post, only if it clears the quality bar and the posting gap has passed. A big, fast-spreading political story (or a huge crossover story) takes the fast lane. Posts carry no links; contested claims are attributed in the text ("Iran says…", "per Reuters").
+5. **Publishes** at most one post, only if it clears the quality bar and the posting gap has passed. A big, fast-spreading political story (or a huge crossover story) takes the fast lane. Posts carry no links and no sourcing jargon (no outlet names, "state media", "according to" or "reportedly"); statements are written naturally as the speaker's ("Iran says it seized…").
 
 An event that was already posted is not posted again from another outlet. A genuinely new development (new numbers, and at least 2 outlets in the last hour, 45+ minutes later) can be posted as a **quote of the original post**, but only when the AI confirms it is new.
 

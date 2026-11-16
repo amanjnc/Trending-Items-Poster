@@ -150,6 +150,14 @@ class EditorValidationTests(unittest.TestCase):
         self.assertEqual(self.check('x'*300)[1], 'too long')
         self.assertEqual(self.check('@nvidia lost sales')[1], 'contains handle')
 
+    def test_sourcing_jargon_rejected_but_direct_statements_allowed(self):
+        sources = ['Iran said it seized an oil tanker in the Strait of Hormuz, Russian state media RT reported.']
+        for text in ('Russian state media says Iran seized an oil tanker.', 'Iran seized a tanker, according to RT.',
+                     'Iran reportedly seized a tanker.', 'Per Reuters, Iran seized a tanker.'):
+            self.assertFalse(editor.validate(dict(post=True, text=text), sources)[0], text)
+        self.assertTrue(editor.validate(dict(post=True, text='Iran says it seized an oil tanker in the Strait of Hormuz.'), sources)[0])
+        self.assertNotIn('Russian state media says', editor.SYSTEM)
+
     def test_edit_retries_once_then_falls_back_to_groq(self):
         bad = json.dumps(dict(post=True, newsworthiness=8, talkability=9, text='Nvidia lost $9 billion.'))
         good = json.dumps(dict(post=True, newsworthiness=8, talkability=9, text='Huang: export controls "have failed."', reply=''))
