@@ -327,9 +327,9 @@ if __name__ == '__main__':
 
 class ProviderDiscoveryTests(unittest.TestCase):
     def setUp(self):
-        editor._gemini_state.update(model=None, thinking=None)
+        editor._gemini_state.update(model=None, thinking=None, down=False)
         editor._groq_state.update(model=None)
-        self.addCleanup(lambda: (editor._gemini_state.update(model=None, thinking=None), editor._groq_state.update(model=None)))
+        self.addCleanup(lambda: (editor._gemini_state.update(model=None, thinking=None, down=False), editor._groq_state.update(model=None)))
 
     def test_gemini_falls_back_on_thinking_option_and_retired_model(self):
         ok = {'candidates': [{'content': {'parts': [{'text': 'thinking...', 'thought': True}, {'text': '{"post": false}'}]}}]}
@@ -347,10 +347,17 @@ class ProviderDiscoveryTests(unittest.TestCase):
             return ok
         with patch.dict('os.environ', {'GEMINI_API_KEY': 'k'}), patch('editor._request', side_effect=request):
             self.assertEqual(editor.gemini('x'), '{"post": false}')
-            self.assertEqual(editor._gemini_state, {'model': 'gemini-9-flash', 'thinking': {'thinkingBudget': 0}})
+            self.assertEqual(editor._gemini_state, {'model': 'gemini-9-flash', 'thinking': {'thinkingBudget': 0}, 'down': False})
             calls.clear()
             editor.gemini('y')
         self.assertEqual(len(calls), 1)  # the working model/option is remembered
+
+    def test_gemini_timeout_skips_gemini_for_rest_of_run(self):
+        with patch.dict('os.environ', {'GEMINI_API_KEY': 'k'}), patch('editor._request', side_effect=editor.EditorUnavailable('TimeoutError')) as request:
+            for _ in range(3):
+                with self.assertRaises(editor.EditorUnavailable):
+                    editor.gemini('x')
+        self.assertEqual(request.call_count, 1)
 
     def test_groq_picks_current_model_after_404(self):
         def request(url, headers, body=None, timeout=75):

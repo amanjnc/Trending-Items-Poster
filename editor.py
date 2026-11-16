@@ -97,8 +97,9 @@ def _post_json(url, body, headers, timeout=75):
 
 
 # Working settings discovered at runtime (model names change; thinking options differ by model).
-_gemini_state = {'model': None, 'thinking': None}
+_gemini_state = {'model': None, 'thinking': None, 'down': False}
 _groq_state = {'model': None}
+GEMINI_TIMEOUT = int(os.environ.get('GEMINI_TIMEOUT', '45'))
 GEMINI_THINKING = ({'thinkingLevel': 'low'}, {'thinkingBudget': 0}, None)
 
 
@@ -118,6 +119,8 @@ def gemini(prompt):
     key = os.environ.get('GEMINI_API_KEY')
     if not key:
         raise EditorUnavailable('no Gemini key')
+    if _gemini_state['down']:
+        raise EditorUnavailable('Gemini skipped after an earlier timeout in this run')
     models = [_gemini_state['model'] or GEMINI_MODEL]
     thinking = [_gemini_state['thinking']] if _gemini_state['model'] else list(GEMINI_THINKING)
     tried = set()
@@ -136,13 +139,17 @@ def gemini(prompt):
                 data = _request(url, {'x-goog-api-key': key}, {
                     'systemInstruction': {'parts': [{'text': SYSTEM}]},
                     'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
-                    'generationConfig': config})
+                    'generationConfig': config}, timeout=GEMINI_TIMEOUT)
             except HTTPFailure as error:
                 if error.status == 400 and option is not None:
                     continue  # this model does not accept that thinking option
                 if error.status == 404 and len(tried) == 1:
                     models.extend(gemini_models(key)[:3])  # configured name retired: pick a current flash model
                     break
+                raise
+            except EditorUnavailable:
+                # Unreachable/slow: don't spend the timeout again on every event this run.
+                _gemini_state['down'] = True
                 raise
             try:
                 parts = data['candidates'][0]['content']['parts']
@@ -211,6 +218,12 @@ def check():
                                 sample=str(result.get('text', ''))[:200])
         except EditorUnavailable as error:
             report[name] = dict(ok=False, error=str(error))
+            if name == 'gemini':
+                # Distinguish "Google unreachable" from "this model is slow/hanging".
+                try:
+                    report[name]['available_flash_models'] = gemini_models(os.environ['GEMINI_API_KEY'])[:6]
+                except EditorUnavailable as listing:
+                    report[name]['model_listing_error'] = str(listing)
     return report
 
 
