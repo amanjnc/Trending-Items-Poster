@@ -141,7 +141,7 @@ class EditorValidationTests(unittest.TestCase):
     def test_edit_retries_once_then_falls_back_to_groq(self):
         bad = json.dumps(dict(post=True, newsworthiness=8, talkability=9, text='Nvidia lost $9 billion.'))
         good = json.dumps(dict(post=True, newsworthiness=8, talkability=9, text='Huang: export controls "have failed."', reply=''))
-        with patch.dict('os.environ', {'GEMINI_API_KEY': 'k', 'GROQ_API_KEY': 'k'}), \
+        with patch.dict('os.environ', {'GEMINI_API_KEY': 'k', 'GROQ_API_KEY': 'k'}), patch.object(editor, 'PROVIDER_ORDER', ['gemini', 'groq']), \
                 patch('editor.gemini', side_effect=[bad, bad]) as gemini, patch('editor.groq', return_value=good) as groq:
             result = editor.edit([('reuters', self.SOURCES[0])])
         self.assertEqual(gemini.call_count, 2)
@@ -149,6 +149,13 @@ class EditorValidationTests(unittest.TestCase):
         groq.assert_called_once()
         self.assertEqual(result['provider'], 'groq')
         self.assertEqual(editor.adjustment(result), 3*3+4*4)
+
+    def test_groq_is_tried_first_by_default(self):
+        good = json.dumps(dict(post=False, newsworthiness=2, talkability=2, text=''))
+        with patch.dict('os.environ', {'GEMINI_API_KEY': 'k', 'GROQ_API_KEY': 'k'}), \
+                patch('editor.gemini') as gemini, patch('editor.groq', return_value=good):
+            self.assertEqual(editor.edit([('a', 'b')])['provider'], 'groq')
+        gemini.assert_not_called()
 
     def test_no_key_means_unavailable(self):
         with patch.dict('os.environ', {'GEMINI_API_KEY': '', 'GROQ_API_KEY': ''}):
